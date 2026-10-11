@@ -6,11 +6,13 @@
  */
 
 import type { ExtensionApi } from "@prifly/extension-api";
+import { registerTools } from "./tools";
 
 let api: ExtensionApi | null = null;
 
 export function activate(given: ExtensionApi): () => void {
   api = given;
+  registerTools(given);
   given.log("activated", {});
   return () => {
     api = null;

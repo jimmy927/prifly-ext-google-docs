@@ -21,6 +21,16 @@ test("the manifest names the extension and asks Google for Drive read access onl
   ]);
 });
 
+test("activate registers the three Google Docs tools", async () => {
+  const fake = fakeApi();
+  stop = (await module.activate(fake.api)) ?? undefined;
+  expect(fake.tools().map((tool) => tool.name)).toEqual([
+    "google_docs_search",
+    "google_docs_read",
+    "google_docs_comments",
+  ]);
+});
+
 test("activate logs and stops cleanly", async () => {
   const fake = fakeApi();
   stop = (await module.activate(fake.api)) ?? undefined;
