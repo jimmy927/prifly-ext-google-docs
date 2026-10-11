@@ -142,7 +142,7 @@ export class Watcher {
   }
 
   private async poll(): Promise<void> {
-    const { api, store } = this.runtime;
+    const { store } = this.runtime;
     const { state, drive } = access(this.runtime);
     if (state.kind === "needs-sign-in") {
       this.pause(state.connection.account);
