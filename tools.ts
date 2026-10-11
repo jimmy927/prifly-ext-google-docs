@@ -37,7 +37,8 @@ export function relativeTime(iso: string | null, now = Date.now()): string {
   return days < 60 ? `${days} days ago` : new Date(then).toISOString().slice(0, 10);
 }
 
-function failure(error: unknown, doc: string | null): string | null {
+/** The sentence for a Drive failure the reader can act on; null for anything else. */
+export function failure(error: unknown, doc: string | null): string | null {
   if (error instanceof DriveSignInError) return signInText(error.account);
   if (!(error instanceof DriveHttpError)) return null;
   if (error.status === 404 && doc !== null) {

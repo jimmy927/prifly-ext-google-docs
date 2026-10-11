@@ -4,6 +4,7 @@
  */
 
 import type { ExtensionApi, ExtensionConnection } from "@prifly/extension-api";
+import type { Drive } from "./drive";
 
 export const DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly";
 
@@ -14,10 +15,16 @@ export type ConnectionState =
   | { kind: "needs-sign-in"; connection: ExtensionConnection }
   | { kind: "ok"; connection: ExtensionConnection };
 
-/** Prefers an ok connection that has the Drive scope; with several, the first. */
-export function connectionState(api: ExtensionApi): ConnectionState {
+/**
+ * Prefers an ok connection that has the Drive scope; with several, the first.
+ * `preferred`, the id of the connection the reader chose, is the only one
+ * considered while it still exists.
+ */
+export function connectionState(api: ExtensionApi, preferred?: string | null): ConnectionState {
   if (api.connections === undefined) return { kind: "no-api" };
-  const all = api.connections.list("google");
+  const google = api.connections.list("google");
+  const chosen = google.filter((each) => each.id === preferred);
+  const all = chosen.length > 0 ? chosen : google;
   const first = all[0];
   if (first === undefined) return { kind: "none" };
   const withScope = all.filter((each) => each.scopes.includes(DRIVE_READONLY));
@@ -62,4 +69,11 @@ export async function askForDrive(api: ExtensionApi, connection?: ExtensionConne
     [DRIVE_READONLY],
     connection === undefined ? undefined : { connection: connection.id },
   );
+}
+
+/** A Drive handle for one connection: its fetch, token added by prifly. */
+export function driveFor(api: ExtensionApi, connection: ExtensionConnection): Drive | null {
+  const connections = api.connections;
+  if (connections === undefined) return null;
+  return { fetch: (url) => connections.fetch(connection.id, url) };
 }

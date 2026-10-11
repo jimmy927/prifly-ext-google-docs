@@ -7,8 +7,11 @@ Your Google Docs in prifly:
   as Markdown, with its open comments and pictures.
 - **Tools for every session** — `google_docs_search`, `google_docs_read`
   (a Doc as Markdown, by id or link) and `google_docs_comments`.
-- **Change chip** — a session started from a Doc is told on its banner when
-  the Doc is edited, with "Send the changes" to hand it the new text.
+- **Change chip** — a session started from a Doc gets a chip on its banner
+  when the Doc is edited, offering "Send the changes" (or "Dismiss"). Nothing
+  reaches the session until you choose it. Drive is polled every
+  `refreshSeconds` (default 120); `state.json` in the extension's folder keeps
+  which session came from which Doc and the changes page token.
 
 Read-only: the extension asks Google for `drive.readonly` and never writes.
 

@@ -34,6 +34,9 @@ const API = "https://www.googleapis.com/drive/v3";
 const DOC_MIME = "application/vnd.google-apps.document";
 const MAX_RETRY_SECONDS = 10;
 const MAX_COMMENT_PAGES = 5;
+const MAX_CHANGE_PAGES = 10;
+
+export const BOARD_PAGE_SIZE = 25;
 
 export const MAX_SEARCH_LIMIT = 50;
 export const DEFAULT_SEARCH_LIMIT = 20;
@@ -46,7 +49,36 @@ export type DocSummary = {
   link: string;
 };
 
-export type DocInfo = { name: string; link: string; modifiedTime: string | null };
+export type DocInfo = {
+  name: string;
+  link: string;
+  modifiedTime: string | null;
+  modifiedBy: string | null;
+  owner: string | null;
+};
+
+/** A Doc as the launch board shows it. */
+export type BoardDoc = {
+  id: string;
+  name: string;
+  modifiedTime: string | null;
+  editor: string | null;
+  owner: string | null;
+  sharedBy: string | null;
+  link: string;
+};
+
+export type BoardList = "starred" | "recent" | "shared";
+
+/** A change to a file, as the changes feed reports it. */
+export type DocChange = {
+  fileId: string;
+  removed: boolean;
+  name: string | null;
+  mimeType: string | null;
+  modifiedTime: string | null;
+  editor: string | null;
+};
 
 export type DriveReply = { content: string; author: string; createdTime: string | null };
 
@@ -242,7 +274,7 @@ export async function searchDocs(
 /** Title, link and last edit of a Doc. */
 export async function docInfo(drive: Drive, id: string, signal: AbortSignal): Promise<DocInfo> {
   const params = new URLSearchParams({
-    fields: "name,webViewLink,modifiedTime",
+    fields: "name,webViewLink,modifiedTime,lastModifyingUser/displayName,owners/displayName",
     supportsAllDrives: "true",
   });
   const body = await getJson(drive, `${API}/files/${encodeURIComponent(id)}?${params}`, signal);
@@ -250,6 +282,8 @@ export async function docInfo(drive: Drive, id: string, signal: AbortSignal): Pr
     name: str(field(body, "name")) ?? "(untitled)",
     link: str(field(body, "webViewLink")) ?? `https://docs.google.com/document/d/${id}/edit`,
     modifiedTime: str(field(body, "modifiedTime")),
+    modifiedBy: str(field(field(body, "lastModifyingUser"), "displayName")),
+    owner: str(field(items(field(body, "owners"))[0], "displayName")),
   };
 }
 
@@ -282,3 +316,110 @@ export async function listComments(
   }
   return comments;
 }
+
+// --- Board lists -------------------------------------------------------
+
+const BOARD_FIELDS =
+  "files(id,name,modifiedTime,lastModifyingUser/displayName,owners/displayName,sharingUser/displayName,webViewLink)";
+
+/** The `files.list` URL of one board column: 25 Docs. */
+export function boardUrl(list: BoardList): string {
+  const base = buildSearchQuery("");
+  const params = new URLSearchParams({
+    q: list === "starred" ? `${base} and starred=true` : base,
+    pageSize: String(BOARD_PAGE_SIZE),
+    includeItemsFromAllDrives: "true",
+    supportsAllDrives: "true",
+    fields: BOARD_FIELDS,
+  });
+  if (list === "shared") {
+    params.set("q", `${base} and sharedWithMe=true`);
+    params.set("orderBy", "sharedWithMeTime desc");
+  } else if (list === "recent") {
+    params.set("orderBy", "viewedByMeTime desc");
+  } else {
+    params.set("orderBy", "modifiedTime desc");
+  }
+  return `${API}/files?${params}`;
+}
+
+function parseBoardDoc(value: unknown): BoardDoc | null {
+  const id = str(field(value, "id"));
+  if (id === null) return null;
+  return {
+    id,
+    name: str(field(value, "name")) ?? "(untitled)",
+    modifiedTime: str(field(value, "modifiedTime")),
+    editor: str(field(field(value, "lastModifyingUser"), "displayName")),
+    owner: str(field(items(field(value, "owners"))[0], "displayName")),
+    sharedBy: str(field(field(value, "sharingUser"), "displayName")),
+    link: str(field(value, "webViewLink")) ?? `https://docs.google.com/document/d/${id}/edit`,
+  };
+}
+
+/** One column of the launch board: up to 25 Docs. */
+export async function listBoardDocs(
+  drive: Drive,
+  list: BoardList,
+  signal: AbortSignal,
+): Promise<BoardDoc[]> {
+  const body = await getJson(drive, boardUrl(list), signal);
+  return items(field(body, "files"))
+    .map(parseBoardDoc)
+    .filter((each): each is BoardDoc => each !== null);
+}
+
+// --- Changes -----------------------------------------------------------
+
+/** Where the changes feed stands now. */
+export async function startPageToken(drive: Drive, signal: AbortSignal): Promise<string | null> {
+  const params = new URLSearchParams({ supportsAllDrives: "true" });
+  const body = await getJson(drive, `${API}/changes/startPageToken?${params}`, signal);
+  return str(field(body, "startPageToken"));
+}
+
+function parseChange(value: unknown): DocChange | null {
+  const fileId = str(field(value, "fileId"));
+  if (fileId === null) return null;
+  const file = field(value, "file");
+  return {
+    fileId,
+    removed: field(value, "removed") === true,
+    name: str(field(file, "name")),
+    mimeType: str(field(file, "mimeType")),
+    modifiedTime: str(field(file, "modifiedTime")),
+    editor: str(field(field(file, "lastModifyingUser"), "displayName")),
+  };
+}
+
+/** Every change since `token`, following the pages; `next` is where to start the next time. */
+export async function listChanges(
+  drive: Drive,
+  token: string,
+  signal: AbortSignal,
+): Promise<{ changes: DocChange[]; next: string }> {
+  const changes: DocChange[] = [];
+  let pageToken = token;
+  let next = token;
+  for (let page = 0; page < MAX_CHANGE_PAGES; page++) {
+    const params = new URLSearchParams({
+      pageToken,
+      includeItemsFromAllDrives: "true",
+      supportsAllDrives: "true",
+      fields:
+        "newStartPageToken,nextPageToken,changes(fileId,removed,file(name,mimeType,modifiedTime,lastModifyingUser/displayName))",
+    });
+    const body = await getJson(drive, `${API}/changes?${params}`, signal);
+    for (const each of items(field(body, "changes"))) {
+      const change = parseChange(each);
+      if (change !== null) changes.push(change);
+    }
+    const following = str(field(body, "nextPageToken"));
+    next = str(field(body, "newStartPageToken")) ?? following ?? next;
+    if (following === null) break;
+    pageToken = following;
+  }
+  return { changes, next };
+}
+
+export const DOC_MIME_TYPE = DOC_MIME;
