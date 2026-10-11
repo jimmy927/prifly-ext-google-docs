@@ -1,70 +1,32 @@
-# prifly-ext-template
+# prifly-ext-google-docs
 
-A minimal prifly extension to start a plugin from: one MCP tool that uses a
-connected account, one launch board, one panel, and tests of each against a
-fake `api`.
+Your Google Docs in prifly:
 
-## Start a plugin from it
+- **From a Google Doc…** — a launcher with your Starred, Recent and Shared
+  Docs and a search over your Drive. The session starts knowing the whole Doc
+  as Markdown, with its open comments and pictures.
+- **Tools for every session** — `google_docs_search`, `google_docs_read`
+  (a Doc as Markdown, by id or link) and `google_docs_comments`.
+- **Change chip** — a session started from a Doc is told on its banner when
+  the Doc is edited, with "Send the changes" to hand it the new text.
 
-1. Copy the folder to a repository of its own, beside your prifly checkout:
+Read-only: the extension asks Google for `drive.readonly` and never writes.
 
-   ```sh
-   cp -r ~/src/prifly/templates/prifly-ext-template ~/src/prifly-ext-<name>
-   cd ~/src/prifly-ext-<name> && git init -b main
-   ```
+## Account
 
-2. Rename it: `id`, `name` and `description` in `prifly-extension.json`,
-   `name` in `package.json`, and the tool's `template_` prefix in
-   `whoami-tool.ts` (a tool name must be unique across every extension).
+It uses a Google account connected in prifly's Vault → Connections, through
+`api.connections` — prifly holds the token and adds it to each request.
+`drive.readonly` is a restricted scope: it works on your own Google client
+(Vault → Connections → your client JSON) without Google's verification. The
+first use asks for it on an account that does not have it yet.
 
-3. Get the types. They come from `@prifly/extension-api`, prifly's
-   `packages/extension-api`. Until it is published, link it once per machine
-   from your prifly checkout, then install:
+## Develop
 
-   ```sh
-   (cd ~/src/prifly/packages/extension-api && bun link)
-   bun install
-   ```
+```sh
+bun install
+bun test && bunx tsc --noEmit && bunx biome check .
+```
 
-   Once it is on npm, replace `"link:@prifly/extension-api"` in
-   `package.json` with its version.
-
-4. Commit `bun.lock`. prifly installs a cloned extension's dependencies
-   itself, with `bun install --frozen-lockfile --production --ignore-scripts`,
-   when it clones it and when an update moves it: what the code imports at
-   run time goes under `dependencies`, tooling under `devDependencies`, and
-   the lock must match `package.json`. Install scripts (`postinstall` and the
-   like, yours and your dependencies') are never run, so pick dependencies
-   that work without them.
-
-5. Try it in prifly: link the folder into the extensions folder and enable it
-   in the Extensions dialog.
-
-   ```sh
-   ln -s ~/src/prifly-ext-<name> ~/.local/share/prifly/extensions/<name>
-   ```
-
-   A linked extension is your own checkout: prifly never updates it or
-   installs into it.
-
-## Checks
-
-`bun test`, `bun run typecheck` and `bun run check` (biome: 500 lines per
-file, 120 per function, cognitive complexity 15, no `any`, no `!`).
-
-## What is where
-
-| File | What it is |
-|---|---|
-| `prifly-extension.json` | The manifest: `connections` (the accounts it uses and why), a `launch`er and a `panel` |
-| `index.ts` | What prifly imports: `activate(api)` registers the tool; `choices`, `launch` and `panel` answer the launcher and the panel |
-| `whoami-tool.ts` | The MCP tool, `mcp__prifly__template_whoami`: calls Microsoft Graph through `api.connections.fetch`, so prifly holds the token |
-| `things.ts` | The board's items and the session a picked one starts |
-| `panel/` | The panel's page; it fetches `api/things`, answered by `panel` in `index.ts` |
-| `test/fake-api.ts` | A fake `api` that records what the extension shows, logs and registers, and a fake `api.connections` over a fake token endpoint — copy it as it is |
-| `test/index.test.ts` | Tests of the tool, the launcher and the panel against the fakes |
-
-Import prifly's types with `import type`: they are erased, so the host never
-needs the package to run the extension. Everything added to the api after
-its first version is optional (`api.tools?.register`, `api.connections?.list`):
-call it that way, and the extension still loads on an older prifly.
+Types come from `@prifly/extension-api`, pinned to a tag of
+`jimmy927/prifly-extension-api`. Tests run against `test/fake-api.ts`, a fake
+of prifly's `api` with a fake token endpoint and a fake Drive.

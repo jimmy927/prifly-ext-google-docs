@@ -1,33 +1,36 @@
 {
-  "id": "template",
-  "name": "Template",
-  "description": "A minimal prifly extension to start a plugin from: one MCP tool, one launch board, one panel.",
+  "id": "google-docs",
+  "name": "Google Docs",
+  "description": "Your Google Docs in prifly: start a session from a Doc, read one as Markdown with its open comments from any session, and hear when a Doc a session started from changes.",
   "version": "0.1.0",
   "main": "index.ts",
+  "prompt": "prompt.md",
   "connections": [
     {
-      "provider": "microsoft",
-      "scopes": ["User.Read"],
-      "why": "Reads your name, to show which account the template's tool uses."
+      "provider": "google",
+      "scopes": ["https://www.googleapis.com/auth/drive.readonly"],
+      "why": "Lists, searches and reads your Docs and their comments. Never writes.",
+      "optional": true
     }
   ],
   "launch": [
     {
-      "id": "things",
-      "label": "Template things",
-      "icon": "box",
-      "description": "Start a session from one of the template's things",
-      "searchPlaceholder": "Search things"
+      "id": "doc",
+      "label": "From a Google Doc…",
+      "icon": "file-text",
+      "description": "Your starred, recent and shared Docs. The session starts knowing the whole Doc as Markdown, with its open comments.",
+      "searchPlaceholder": "Search your Drive by title or text…"
     }
   ],
-  "panels": [
+  "settings": [
     {
-      "id": "things",
-      "label": "Template",
-      "icon": "box",
-      "description": "The template's things, in a window of its own",
-      "folder": "panel",
-      "page": "index.html"
+      "id": "refreshSeconds",
+      "type": "number",
+      "label": "Check Drive for changes every (seconds)",
+      "description": "How often a Doc a session started from is checked for edits.",
+      "default": 120,
+      "min": 30,
+      "max": 3600
     }
   ]
 }

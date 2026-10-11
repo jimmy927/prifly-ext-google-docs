@@ -1,0 +1,1 @@
+The Google Docs extension is installed. A Google Docs link (docs.google.com/document/d/...) the reader gives you can be read as Markdown with `google_docs_read`, its open comments with `google_docs_comments`, and their Docs searched with `google_docs_search`.
