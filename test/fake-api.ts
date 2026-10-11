@@ -212,6 +212,7 @@ export function fakeApi(
     start: async () => ({ started: false, reason: "A fake api starts no session." }),
     snooze: () => undefined,
     dialog: async () => null,
+    openUrl: async () => false,
   };
   const callTool: FakeApi["callTool"] = (name, args, pick = null) => {
     const tool = tools.find((each) => each.name === name);
@@ -220,6 +221,7 @@ export function fakeApi(
       session: "fake-session",
       pick: async () => pick,
       signal: new AbortController().signal,
+      scratchpad: process.cwd(),
     };
     return tool.call(args, ctx);
   };

@@ -224,7 +224,7 @@ export class Watcher {
     const when = relativeTime(chip.modifiedTime, this.runtime.now());
     return {
       key: session,
-      icon: "link",
+      icon: "file-text",
       label: `Doc edited by ${chip.editor ?? "someone"} · ${when}`,
       tone: "info",
       details: [title],

@@ -81,6 +81,7 @@ test("an edit of a launched Doc puts an info chip on its session that only offer
   const chip = lastChips(s)["session-1"]?.[0];
   expect(chip?.label).toMatch(/^Doc edited by Maryam · /);
   expect(chip?.tone).toBe("info");
+  expect(chip?.icon).toBe("file-text");
   expect(chip?.actions?.map((each) => each.id)).toEqual([SEND_CHANGES, DISMISS]);
   expect(chip?.actions?.[0]?.label).toBe("Send the changes");
   expect(s.prompts).toEqual([]);
