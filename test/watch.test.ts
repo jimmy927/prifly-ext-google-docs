@@ -242,3 +242,11 @@ test("a poll still running when stop is called does not schedule another", async
   await settle();
   expect(s.timers.pending()).toEqual([]);
 });
+
+test("a rate limit keeps the page token; only a refused token starts over", async () => {
+  const s = setup({ failWith: [{ status: 403 }] });
+  s.runtime.store.state.pageToken = "start-1";
+  await s.watcher.tick();
+  expect(s.runtime.store.state.pageToken).toBe("start-1");
+  expect(s.fake.logs.map((each) => each.event)).toContain("watch-failed");
+});

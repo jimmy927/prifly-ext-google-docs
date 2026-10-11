@@ -31,13 +31,15 @@ export function start(given: ExtensionApi, options: RuntimeOptions = {}): () => 
   api = given;
   runtime = createRuntime(given, options);
   registerTools(given);
-  watcher = new Watcher(runtime);
-  watcher.start();
+  const mineWatcher = new Watcher(runtime);
+  watcher = mineWatcher;
+  mineWatcher.start();
   given.log("activated", {});
   const mine = runtime;
   return () => {
-    watcher?.stop();
+    mineWatcher.stop();
     mine.cache.stop();
+    if (runtime !== mine) return;
     api = null;
     runtime = null;
     watcher = null;

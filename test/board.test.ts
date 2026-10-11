@@ -297,3 +297,21 @@ test("a card is 'started' once a session was launched from it", async () => {
   expect(items.find((each) => each.key === A)?.started).toBe(true);
   expect(items.find((each) => each.key === B)?.started).toBeUndefined();
 });
+
+test("a search still running when the account is switched does not show the old account's Docs", async () => {
+  const s = setup({ ...threeLists(), searchFiles: [file(docId(9), "Zebra")] });
+  await loaded(s);
+  const open = Promise.withResolvers<void>();
+  const fetchNow = s.connections.fetch;
+  s.connections.fetch = async (id, request, options) => {
+    if (String(request).includes("fullText")) await open.promise;
+    return await fetchNow(id, request, options);
+  };
+  await choices(s.runtime, "zeb");
+  s.timers.fire();
+  s.runtime.cache.reset();
+  open.resolve();
+  await settle();
+  expect(s.runtime.cache.searched("zeb")).toBeUndefined();
+  expect(s.runtime.cache.find(docId(9))).toBeUndefined();
+});

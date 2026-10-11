@@ -167,6 +167,7 @@ export class BoardCache {
 
   private async search(key: string, drive: Drive): Promise<void> {
     this.searchTimer = null;
+    const generation = this.generation;
     let cards: Card[] = [];
     try {
       const found = await searchDocs(drive, key, BOARD_PAGE_SIZE, this.abort.signal);
@@ -174,6 +175,7 @@ export class BoardCache {
     } catch (error) {
       this.deps.log("search-failed", { message: error instanceof Error ? error.message : "?" });
     }
+    if (generation !== this.generation) return;
     if (this.pendingQuery === key) this.pendingQuery = null;
     this.searches.set(key, cards);
     for (const oldest of [...this.searches.keys()].slice(0, -SEARCHES_KEPT)) {

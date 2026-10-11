@@ -30,6 +30,8 @@ export const DISMISS = "dismiss";
 type Chip = { docId: string; editor: string | null; modifiedTime: string | null };
 
 const CALL_TIMEOUT_MS = 60_000;
+// What Drive answers for a page token it no longer knows; a rate limit (403, 429) keeps the token.
+const STALE_TOKEN = [400, 404, 410];
 
 function later(time: string | null, than: string | null): boolean {
   const a = time === null ? Number.NaN : Date.parse(time);
@@ -123,7 +125,7 @@ export class Watcher {
       this.pause(error.account);
       return;
     }
-    if (error instanceof DriveHttpError && error.status >= 400 && error.status < 500) {
+    if (error instanceof DriveHttpError && STALE_TOKEN.includes(error.status)) {
       // The page token went stale: start again from now.
       store.state.pageToken = null;
       store.save();
@@ -131,6 +133,12 @@ export class Watcher {
       return;
     }
     api.log("watch-failed", { message: errorText(error) });
+  }
+
+  private resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.runtime.api.log("watch-resumed");
   }
 
   private async poll(): Promise<void> {
@@ -141,18 +149,16 @@ export class Watcher {
       return;
     }
     if (drive === null) return;
-    if (this.paused) {
-      this.paused = false;
-      api.log("watch-resumed");
-    }
     const signal = AbortSignal.timeout(CALL_TIMEOUT_MS);
     const token = store.state.pageToken;
     if (token === null) {
       store.state.pageToken = await startPageToken(drive, signal);
+      this.resume();
       store.save();
       return;
     }
     const { changes, next } = await listChanges(drive, token, signal);
+    this.resume();
     this.handle(changes, drive);
     store.state.pageToken = next;
     store.save();

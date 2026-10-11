@@ -125,6 +125,7 @@ async function switchAccount(runtime: Runtime): Promise<Launch> {
   const next = all[(at + 1) % Math.max(all.length, 1)];
   if (next === undefined) return empty(stateText({ kind: "none" }));
   runtime.store.state.connection = next.id;
+  runtime.store.state.pageToken = null;
   runtime.store.save();
   runtime.cache.reset();
   return empty(`Now showing the Docs of ${next.account}.`);
