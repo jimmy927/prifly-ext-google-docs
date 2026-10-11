@@ -1,1 +1,3 @@
 node_modules/
+# Written at run time next to the extension: session → Doc links, the changes page token.
+state.json
