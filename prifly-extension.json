@@ -17,7 +17,7 @@
     {
       "id": "doc",
       "label": "From a Google Doc…",
-      "icon": "file-text",
+      "icon": "google-docs",
       "description": "Your starred, recent and shared Docs. The session starts knowing the whole Doc as Markdown, with its open comments.",
       "searchPlaceholder": "Search your Drive by title or text…"
     }
