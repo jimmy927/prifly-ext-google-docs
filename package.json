@@ -1,6 +1,7 @@
 {
   "name": "prifly-ext-google-docs",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "description": "A prifly extension: your Google Docs in sessions, read as Markdown with their open comments.",
   "scripts": {
