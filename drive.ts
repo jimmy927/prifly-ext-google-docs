@@ -1,42 +1,45 @@
 /**
- * Google Drive over `api.connections.fetch`: small typed functions that take a
- * `Drive` handle (a connection's fetch) and an AbortSignal. The extension
- * never holds a token.
+ * Google's Drive and Docs APIs over `api.connections.fetch`: small typed
+ * functions that take a `Google` handle (a connection's fetch) and an
+ * AbortSignal. The extension never holds a token.
  */
 
 import type { ExtensionNeedsSignIn } from "@prifly/extension-api";
 
-export type Drive = { fetch(url: string): Promise<Response | ExtensionNeedsSignIn> };
+/** A connection's fetch: prifly adds the token to each request. */
+export type Google = {
+  fetch(url: string, init?: RequestInit): Promise<Response | ExtensionNeedsSignIn>;
+};
 
-/** Drive answered with a status that is not a success. */
-export class DriveHttpError extends Error {
+/** Google answered with a status that is not a success. */
+export class GoogleHttpError extends Error {
   readonly status: number;
   readonly detail: string;
   constructor(status: number, detail: string) {
     super(`Google answered ${status}${detail === "" ? "" : `: ${detail}`}`);
-    this.name = "DriveHttpError";
+    this.name = "GoogleHttpError";
     this.status = status;
     this.detail = detail;
   }
 }
 
 /** Google ended the grant of the connection (a `needsSignIn` answer). */
-export class DriveSignInError extends Error {
+export class SignInError extends Error {
   readonly account: string;
   constructor(account: string) {
     super(`Google ended the sign-in for ${account}`);
-    this.name = "DriveSignInError";
+    this.name = "SignInError";
     this.account = account;
   }
 }
 
-const API = "https://www.googleapis.com/drive/v3";
-const DOC_MIME = "application/vnd.google-apps.document";
+export const DRIVE_API = "https://www.googleapis.com/drive/v3";
+const UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
+export const DOC_MIME_TYPE = "application/vnd.google-apps.document";
 const MAX_RETRY_SECONDS = 10;
 const MAX_COMMENT_PAGES = 5;
-const MAX_CHANGE_PAGES = 10;
-
-export const BOARD_PAGE_SIZE = 25;
+const MAX_COUNT_PAGES = 10;
+const COUNT_PAGE_SIZE = 1000;
 
 export const MAX_SEARCH_LIMIT = 50;
 export const DEFAULT_SEARCH_LIMIT = 20;
@@ -57,29 +60,6 @@ export type DocInfo = {
   owner: string | null;
 };
 
-/** A Doc as the launch board shows it. */
-export type BoardDoc = {
-  id: string;
-  name: string;
-  modifiedTime: string | null;
-  editor: string | null;
-  owner: string | null;
-  sharedBy: string | null;
-  link: string;
-};
-
-export type BoardList = "starred" | "recent" | "shared";
-
-/** A change to a file, as the changes feed reports it. */
-export type DocChange = {
-  fileId: string;
-  removed: boolean;
-  name: string | null;
-  mimeType: string | null;
-  modifiedTime: string | null;
-  editor: string | null;
-};
-
 export type DriveReply = { content: string; author: string; createdTime: string | null };
 
 export type DriveComment = {
@@ -91,6 +71,11 @@ export type DriveComment = {
   quoted: string | null;
   replies: DriveReply[];
 };
+
+/** The link Google gives a Doc it has not said otherwise. */
+export function docLink(id: string): string {
+  return `https://docs.google.com/document/d/${id}/edit`;
+}
 
 // --- Ids ---------------------------------------------------------------
 
@@ -118,7 +103,7 @@ function quote(text: string): string {
 
 /** The Drive `q` for Docs: all of them, or those whose text or title holds `query`. */
 export function buildSearchQuery(query: string): string {
-  const base = `mimeType='${DOC_MIME}' and trashed=false`;
+  const base = `mimeType='${DOC_MIME_TYPE}' and trashed=false`;
   const text = query.trim();
   if (text === "") return base;
   return `${base} and (fullText contains ${quote(text)} or name contains ${quote(text)})`;
@@ -138,35 +123,41 @@ export function searchUrl(query: string, limit: number): string {
   });
   // Drive refuses orderBy together with fullText.
   if (query.trim() === "") params.set("orderBy", "modifiedTime desc");
-  return `${API}/files?${params}`;
+  return `${DRIVE_API}/files?${params}`;
 }
+
+const COMMENT_FIELDS =
+  "id,content,resolved,createdTime,author/displayName,quotedFileContent/value,replies(content,author/displayName,createdTime)";
 
 function commentsUrl(id: string, pageToken: string | null): string {
   const params = new URLSearchParams({
     includeDeleted: "false",
     pageSize: "100",
-    fields:
-      "comments(id,content,resolved,createdTime,author/displayName,quotedFileContent/value,replies(content,author/displayName,createdTime)),nextPageToken",
+    fields: `comments(${COMMENT_FIELDS}),nextPageToken`,
   });
   if (pageToken !== null) params.set("pageToken", pageToken);
-  return `${API}/files/${encodeURIComponent(id)}/comments?${params}`;
+  return `${DRIVE_API}/files/${encodeURIComponent(id)}/comments?${params}`;
 }
 
 // --- Transport ---------------------------------------------------------
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function field(value: unknown, key: string): unknown {
+export function field(value: unknown, key: string): unknown {
   return isRecord(value) ? value[key] : undefined;
 }
 
-function str(value: unknown): string | null {
+export function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function items(value: unknown): unknown[] {
+export function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function items(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
@@ -194,27 +185,54 @@ function retryAfterMs(response: Response): number {
 async function errorDetail(response: Response): Promise<string> {
   try {
     const body: unknown = await response.json();
-    return str(field(field(body, "error"), "message"))?.slice(0, 200) ?? "";
+    return str(field(field(body, "error"), "message"))?.slice(0, 300) ?? "";
   } catch {
     return "";
   }
 }
 
-/** One request; 429 and 503 wait `Retry-After` (at most 10 s) and go once more. */
-async function send(drive: Drive, url: string, signal: AbortSignal): Promise<Response> {
+/**
+ * One request. A GET answered 429 or 503 waits `Retry-After` (at most 10 s)
+ * and goes once more; a write is never sent twice.
+ */
+export async function send(
+  google: Google,
+  url: string,
+  signal: AbortSignal,
+  init?: RequestInit,
+): Promise<Response> {
+  const retries = (init?.method ?? "GET").toUpperCase() === "GET";
   for (let attempt = 0; ; attempt++) {
     signal.throwIfAborted();
-    const answer = await drive.fetch(url);
-    if ("needsSignIn" in answer) throw new DriveSignInError(answer.needsSignIn.account);
+    const answer = await google.fetch(url, init);
+    if ("needsSignIn" in answer) throw new SignInError(answer.needsSignIn.account);
     if (answer.ok) return answer;
     const busy = answer.status === 429 || answer.status === 503;
-    if (!busy || attempt > 0) throw new DriveHttpError(answer.status, await errorDetail(answer));
+    if (!retries || !busy || attempt > 0) {
+      throw new GoogleHttpError(answer.status, await errorDetail(answer));
+    }
     await pause(retryAfterMs(answer), signal);
   }
 }
 
-async function getJson(drive: Drive, url: string, signal: AbortSignal): Promise<unknown> {
-  return await (await send(drive, url, signal)).json();
+export async function getJson(google: Google, url: string, signal: AbortSignal): Promise<unknown> {
+  return await (await send(google, url, signal)).json();
+}
+
+/** A request with a JSON body, answered with JSON. */
+export async function sendJson(
+  google: Google,
+  method: string,
+  url: string,
+  body: unknown,
+  signal: AbortSignal,
+): Promise<unknown> {
+  const init: RequestInit = {
+    method,
+    headers: { "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify(body),
+  };
+  return await (await send(google, url, signal, init)).json();
 }
 
 // --- Parsing -----------------------------------------------------------
@@ -229,7 +247,7 @@ function parseDoc(value: unknown): DocSummary | null {
     modifiedBy:
       str(field(field(value, "lastModifyingUser"), "displayName")) ??
       str(field(items(field(value, "owners"))[0], "displayName")),
-    link: str(field(value, "webViewLink")) ?? `https://docs.google.com/document/d/${id}/edit`,
+    link: str(field(value, "webViewLink")) ?? docLink(id),
   };
 }
 
@@ -255,16 +273,16 @@ function parseComment(value: unknown): DriveComment | null {
   };
 }
 
-// --- Calls -------------------------------------------------------------
+// --- Reads -------------------------------------------------------------
 
 /** Docs whose text or title holds `query` (the recent ones for an empty query). */
 export async function searchDocs(
-  drive: Drive,
+  google: Google,
   query: string,
   limit: number,
   signal: AbortSignal,
 ): Promise<{ docs: DocSummary[]; more: boolean }> {
-  const body = await getJson(drive, searchUrl(query, limit), signal);
+  const body = await getJson(google, searchUrl(query, limit), signal);
   const docs = items(field(body, "files"))
     .map(parseDoc)
     .filter((each): each is DocSummary => each !== null);
@@ -272,15 +290,16 @@ export async function searchDocs(
 }
 
 /** Title, link and last edit of a Doc. */
-export async function docInfo(drive: Drive, id: string, signal: AbortSignal): Promise<DocInfo> {
+export async function docInfo(google: Google, id: string, signal: AbortSignal): Promise<DocInfo> {
   const params = new URLSearchParams({
     fields: "name,webViewLink,modifiedTime,lastModifyingUser/displayName,owners/displayName",
     supportsAllDrives: "true",
   });
-  const body = await getJson(drive, `${API}/files/${encodeURIComponent(id)}?${params}`, signal);
+  const url = `${DRIVE_API}/files/${encodeURIComponent(id)}?${params}`;
+  const body = await getJson(google, url, signal);
   return {
     name: str(field(body, "name")) ?? "(untitled)",
-    link: str(field(body, "webViewLink")) ?? `https://docs.google.com/document/d/${id}/edit`,
+    link: str(field(body, "webViewLink")) ?? docLink(id),
     modifiedTime: str(field(body, "modifiedTime")),
     modifiedBy: str(field(field(body, "lastModifyingUser"), "displayName")),
     owner: str(field(items(field(body, "owners"))[0], "displayName")),
@@ -289,24 +308,24 @@ export async function docInfo(drive: Drive, id: string, signal: AbortSignal): Pr
 
 /** The Doc exported as Markdown (pictures inline as data: URIs). */
 export async function exportMarkdown(
-  drive: Drive,
+  google: Google,
   id: string,
   signal: AbortSignal,
 ): Promise<string> {
-  const url = `${API}/files/${encodeURIComponent(id)}/export?mimeType=text%2Fmarkdown`;
-  return await (await send(drive, url, signal)).text();
+  const url = `${DRIVE_API}/files/${encodeURIComponent(id)}/export?mimeType=text%2Fmarkdown`;
+  return await (await send(google, url, signal)).text();
 }
 
 /** Every comment of the Doc, following up to 5 pages. */
 export async function listComments(
-  drive: Drive,
+  google: Google,
   id: string,
   signal: AbortSignal,
 ): Promise<DriveComment[]> {
   const comments: DriveComment[] = [];
   let pageToken: string | null = null;
   for (let page = 0; page < MAX_COMMENT_PAGES; page++) {
-    const body = await getJson(drive, commentsUrl(id, pageToken), signal);
+    const body = await getJson(google, commentsUrl(id, pageToken), signal);
     for (const each of items(field(body, "comments"))) {
       const comment = parseComment(each);
       if (comment !== null) comments.push(comment);
@@ -317,109 +336,107 @@ export async function listComments(
   return comments;
 }
 
-// --- Board lists -------------------------------------------------------
-
-const BOARD_FIELDS =
-  "files(id,name,modifiedTime,lastModifyingUser/displayName,owners/displayName,sharingUser/displayName,webViewLink)";
-
-/** The `files.list` URL of one board column: 25 Docs. */
-export function boardUrl(list: BoardList): string {
-  const base = buildSearchQuery("");
-  const params = new URLSearchParams({
-    q: list === "starred" ? `${base} and starred=true` : base,
-    pageSize: String(BOARD_PAGE_SIZE),
-    includeItemsFromAllDrives: "true",
-    supportsAllDrives: "true",
-    fields: BOARD_FIELDS,
-  });
-  if (list === "shared") {
-    params.set("q", `${base} and sharedWithMe=true`);
-    params.set("orderBy", "sharedWithMeTime desc");
-  } else if (list === "recent") {
-    params.set("orderBy", "viewedByMeTime desc");
-  } else {
-    params.set("orderBy", "modifiedTime desc");
-  }
-  return `${API}/files?${params}`;
+function commentUrl(doc: string, comment: string): string {
+  return `${DRIVE_API}/files/${encodeURIComponent(doc)}/comments/${encodeURIComponent(comment)}`;
 }
 
-function parseBoardDoc(value: unknown): BoardDoc | null {
-  const id = str(field(value, "id"));
-  if (id === null) return null;
+/** One comment of the Doc. */
+export async function getComment(
+  google: Google,
+  doc: string,
+  comment: string,
+  signal: AbortSignal,
+): Promise<DriveComment> {
+  const params = new URLSearchParams({ fields: COMMENT_FIELDS });
+  const body = await getJson(google, `${commentUrl(doc, comment)}?${params}`, signal);
+  const parsed = parseComment(body);
+  if (parsed === null) throw new GoogleHttpError(404, "no such comment");
+  return parsed;
+}
+
+/** How many Docs the account can see in Drive, and whether there are more than were counted. */
+export async function countDocs(
+  google: Google,
+  signal: AbortSignal,
+): Promise<{ count: number; more: boolean }> {
+  let count = 0;
+  let pageToken: string | null = null;
+  for (let page = 0; page < MAX_COUNT_PAGES; page++) {
+    const params = new URLSearchParams({
+      q: buildSearchQuery(""),
+      pageSize: String(COUNT_PAGE_SIZE),
+      fields: "files(id),nextPageToken",
+    });
+    if (pageToken !== null) params.set("pageToken", pageToken);
+    const body = await getJson(google, `${DRIVE_API}/files?${params}`, signal);
+    count += items(field(body, "files")).length;
+    pageToken = str(field(body, "nextPageToken"));
+    if (pageToken === null) return { count, more: false };
+  }
+  return { count, more: true };
+}
+
+// --- Writes ------------------------------------------------------------
+
+/** The URL a reply or a resolve is posted to. */
+export function replyUrl(doc: string, comment: string): string {
+  return `${commentUrl(doc, comment)}/replies?fields=id,content,action`;
+}
+
+/** Drive v3 `replies.create`: a reply, or with `resolve` the comment resolved (with an optional reply). */
+export async function createReply(
+  google: Google,
+  doc: string,
+  comment: string,
+  content: string,
+  resolve: boolean,
+  signal: AbortSignal,
+): Promise<void> {
+  const body: Record<string, string> = { content };
+  if (resolve) body["action"] = "resolve";
+  await sendJson(google, "POST", replyUrl(doc, comment), body, signal);
+}
+
+/** The URL a Markdown upload that becomes a Doc goes to. */
+export const CREATE_URL = `${UPLOAD_API}/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink`;
+
+/** The multipart body of a Markdown upload converted to a Google Doc. */
+export function createBody(
+  title: string,
+  markdown: string,
+  boundary: string,
+): { body: string; contentType: string } {
+  const metadata = JSON.stringify({ name: title, mimeType: DOC_MIME_TYPE });
+  const body = [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    metadata,
+    `--${boundary}`,
+    "Content-Type: text/markdown; charset=UTF-8",
+    "",
+    markdown,
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+  return { body, contentType: `multipart/related; boundary=${boundary}` };
+}
+
+/** A new Google Doc from Markdown, converted by Drive on upload. */
+export async function createDoc(
+  google: Google,
+  title: string,
+  markdown: string,
+  signal: AbortSignal,
+): Promise<{ id: string; name: string; link: string }> {
+  const { body, contentType } = createBody(title, markdown, `prifly-${crypto.randomUUID()}`);
+  const init: RequestInit = { method: "POST", headers: { "Content-Type": contentType }, body };
+  const answer: unknown = await (await send(google, CREATE_URL, signal, init)).json();
+  const id = str(field(answer, "id"));
+  if (id === null) throw new GoogleHttpError(200, "the answer named no Doc id");
   return {
     id,
-    name: str(field(value, "name")) ?? "(untitled)",
-    modifiedTime: str(field(value, "modifiedTime")),
-    editor: str(field(field(value, "lastModifyingUser"), "displayName")),
-    owner: str(field(items(field(value, "owners"))[0], "displayName")),
-    sharedBy: str(field(field(value, "sharingUser"), "displayName")),
-    link: str(field(value, "webViewLink")) ?? `https://docs.google.com/document/d/${id}/edit`,
+    name: str(field(answer, "name")) ?? title,
+    link: str(field(answer, "webViewLink")) ?? docLink(id),
   };
 }
-
-/** One column of the launch board: up to 25 Docs. */
-export async function listBoardDocs(
-  drive: Drive,
-  list: BoardList,
-  signal: AbortSignal,
-): Promise<BoardDoc[]> {
-  const body = await getJson(drive, boardUrl(list), signal);
-  return items(field(body, "files"))
-    .map(parseBoardDoc)
-    .filter((each): each is BoardDoc => each !== null);
-}
-
-// --- Changes -----------------------------------------------------------
-
-/** Where the changes feed stands now. */
-export async function startPageToken(drive: Drive, signal: AbortSignal): Promise<string | null> {
-  const params = new URLSearchParams({ supportsAllDrives: "true" });
-  const body = await getJson(drive, `${API}/changes/startPageToken?${params}`, signal);
-  return str(field(body, "startPageToken"));
-}
-
-function parseChange(value: unknown): DocChange | null {
-  const fileId = str(field(value, "fileId"));
-  if (fileId === null) return null;
-  const file = field(value, "file");
-  return {
-    fileId,
-    removed: field(value, "removed") === true,
-    name: str(field(file, "name")),
-    mimeType: str(field(file, "mimeType")),
-    modifiedTime: str(field(file, "modifiedTime")),
-    editor: str(field(field(file, "lastModifyingUser"), "displayName")),
-  };
-}
-
-/** Every change since `token`, following the pages; `next` is where to start the next time. */
-export async function listChanges(
-  drive: Drive,
-  token: string,
-  signal: AbortSignal,
-): Promise<{ changes: DocChange[]; next: string }> {
-  const changes: DocChange[] = [];
-  let pageToken = token;
-  let next = token;
-  for (let page = 0; page < MAX_CHANGE_PAGES; page++) {
-    const params = new URLSearchParams({
-      pageToken,
-      includeItemsFromAllDrives: "true",
-      supportsAllDrives: "true",
-      fields:
-        "newStartPageToken,nextPageToken,changes(fileId,removed,file(name,mimeType,modifiedTime,lastModifyingUser/displayName))",
-    });
-    const body = await getJson(drive, `${API}/changes?${params}`, signal);
-    for (const each of items(field(body, "changes"))) {
-      const change = parseChange(each);
-      if (change !== null) changes.push(change);
-    }
-    const following = str(field(body, "nextPageToken"));
-    next = str(field(body, "newStartPageToken")) ?? following ?? next;
-    if (following === null) break;
-    pageToken = following;
-  }
-  return { changes, next };
-}
-
-export const DOC_MIME_TYPE = DOC_MIME;

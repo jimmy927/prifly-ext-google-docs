@@ -1,36 +1,19 @@
 {
   "id": "google-docs",
   "name": "Google Docs",
-  "description": "Your Google Docs in prifly: start a session from a Doc, read one as Markdown with its open comments from any session, and hear when a Doc a session started from changes.",
-  "version": "0.1.0",
+  "description": "Your Google Docs in every prifly session: find and read them, create new ones from Markdown, edit them in place and answer their comments. Every write is confirmed by you first.",
+  "version": "0.2.0",
   "main": "index.ts",
   "prompt": "prompt.md",
   "connections": [
     {
       "provider": "google",
-      "scopes": ["https://www.googleapis.com/auth/drive.readonly"],
-      "why": "Lists, searches and reads your Docs and their comments. Never writes.",
+      "scopes": [
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive"
+      ],
+      "why": "Finds, reads, creates and edits your Docs in place, and replies to and resolves their comments. Every write is shown to you on a card first.",
       "optional": true
-    }
-  ],
-  "launch": [
-    {
-      "id": "doc",
-      "label": "From a Google Doc…",
-      "icon": "google-docs",
-      "description": "Your starred, recent and shared Docs. The session starts knowing the whole Doc as Markdown, with its open comments.",
-      "searchPlaceholder": "Search your Drive by title or text…"
-    }
-  ],
-  "settings": [
-    {
-      "id": "refreshSeconds",
-      "type": "number",
-      "label": "Check Drive for changes every (seconds)",
-      "description": "How often a Doc a session started from is checked for edits.",
-      "default": 120,
-      "min": 30,
-      "max": 3600
     }
   ]
 }

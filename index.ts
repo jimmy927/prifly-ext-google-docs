@@ -1,92 +1,29 @@
 /**
- * The Google Docs extension: what prifly imports. `activate` is given the api,
- * registers the tools and starts the watcher; `choices`, `open`, `launch`,
- * `launched` and `action` are the "From a Google Doc…" launcher. Types come
- * from `@prifly/extension-api` with `import type`, so nothing of it is loaded
- * at run time.
+ * The Google Docs extension: what prifly imports. `activate` registers the
+ * tools a session uses to read, create and edit Docs in place, and keeps the
+ * status line in Settings current. It has no launcher, chip or panel. Types
+ * come from `@prifly/extension-api` with `import type`, so nothing of it is
+ * loaded at run time.
  */
 
-import type {
-  ActionPicked,
-  ExtensionApi,
-  Launch,
-  LaunchBoard,
-  LaunchChoice,
-  LaunchItem,
-} from "@prifly/extension-api";
-import { choices as boardChoices } from "./board";
-import { launch as launchDoc, open as openDoc, launched as recordLaunch } from "./launch";
-import { createRuntime, type Runtime, type RuntimeOptions } from "./runtime";
-import { registerTools } from "./tools";
-import { Watcher } from "./watch";
+import type { ExtensionApi } from "@prifly/extension-api";
+import { StatusLine } from "./status";
+import type { Timers } from "./timers";
+import { registerTools, type ToolOptions } from "./tools";
 
-let api: ExtensionApi | null = null;
-let runtime: Runtime | null = null;
-let watcher: Watcher | null = null;
+export type StartOptions = Pick<ToolOptions, "fetchPublic"> & { timers?: Timers };
 
-const NOT_RUNNING = "The Google Docs extension is not running.";
-
-/** `activate` with the clock and waits of the runtime replaced; for tests. */
-export function start(given: ExtensionApi, options: RuntimeOptions = {}): () => void {
-  api = given;
-  runtime = createRuntime(given, options);
-  registerTools(given);
-  const mineWatcher = new Watcher(runtime);
-  watcher = mineWatcher;
-  mineWatcher.start();
-  given.log("activated", {});
-  const mine = runtime;
-  return () => {
-    mineWatcher.stop();
-    mine.cache.stop();
-    if (runtime !== mine) return;
-    api = null;
-    runtime = null;
-    watcher = null;
-  };
+/** `activate` with the clock and the public fetch replaced; for tests. */
+export function start(api: ExtensionApi, options: StartOptions = {}): () => void {
+  const status = new StatusLine(api, options.timers);
+  const tools: ToolOptions = { onSignedIn: () => void status.refresh() };
+  if (options.fetchPublic !== undefined) tools.fetchPublic = options.fetchPublic;
+  registerTools(api, tools);
+  status.start();
+  api.log("activated", {});
+  return () => status.stop();
 }
 
-export function activate(given: ExtensionApi): () => void {
-  return start(given);
-}
-
-/** The api while the extension is active; null once prifly stopped it. */
-export function current(): ExtensionApi | null {
-  return api;
-}
-
-export async function choices(
-  _launchId: string,
-  query: string,
-): Promise<LaunchChoice[] | LaunchBoard> {
-  if (runtime === null) return [{ key: "!stopped", title: NOT_RUNNING }];
-  return await boardChoices(runtime, query);
-}
-
-export async function open(_launchId: string, key: string): Promise<LaunchItem> {
-  if (runtime === null) return { title: "Google Docs", markdown: NOT_RUNNING };
-  return await openDoc(runtime, key);
-}
-
-export async function launch(
-  _launchId: string,
-  key: string,
-  input: string,
-  _how: { again: boolean },
-): Promise<Launch> {
-  if (runtime === null) return { prompt: "", message: NOT_RUNNING };
-  return await launchDoc(runtime, key, input);
-}
-
-export function launched(_launchId: string, key: string, sessionId: string): void {
-  if (runtime !== null) recordLaunch(runtime, key, sessionId);
-}
-
-/** A chip's menu: "Send the changes" and "Dismiss" on a session's Doc-edited chip. */
-export async function action(
-  key: string,
-  actionId: string,
-  _picked?: ActionPicked,
-): Promise<string | undefined> {
-  return await watcher?.act(key, actionId);
+export function activate(api: ExtensionApi): () => void {
+  return start(api);
 }

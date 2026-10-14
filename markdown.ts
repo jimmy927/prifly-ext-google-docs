@@ -1,7 +1,6 @@
 /**
  * A Doc's Markdown made fit for a prompt: pictures pulled out, a size cap, and
- * comments rendered as Markdown. The launcher reuses `extractPictures` and
- * `renderComments`.
+ * comments rendered as Markdown.
  */
 
 import type { DriveComment } from "./drive";
@@ -86,6 +85,7 @@ function renderComment(comment: DriveComment): string {
   }
   const said = byline(comment.author, comment.createdTime, comment.content, "");
   lines.push(comment.resolved ? `${said} (resolved)` : said);
+  lines.push(`(comment id: ${comment.id})`);
   for (const reply of comment.replies) {
     lines.push(byline(reply.author, reply.createdTime, reply.content, "  ↳ "));
   }

@@ -1,6 +1,6 @@
-/** A fake Drive for the tests: a FakeProvider answering the calls the extension makes. */
+/** A fake Google for the tests: a FakeProvider answering the Drive and Docs calls the extension makes. */
 
-import { DRIVE_READONLY } from "../connection";
+import { SCOPES } from "../connection";
 import type { FakeAccount, FakeProvider } from "./fake-api";
 
 export const DOC_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz";
@@ -8,110 +8,158 @@ export const ACCOUNT: FakeAccount = {
   id: "g1",
   provider: "google",
   account: "maryam@example.com",
-  scopes: [DRIVE_READONLY],
+  scopes: [...SCOPES],
 };
 
-type DriveFailure = { status: number; retryAfter?: string };
+type Failure = { status: number; retryAfter?: string; message?: string };
 
 export type DriveData = {
   files?: unknown[];
   nextPageToken?: string;
-  /** The three board lists and the search answer; each falls back to `files`. */
-  starred?: unknown[];
-  recent?: unknown[];
-  shared?: unknown[];
-  searchFiles?: unknown[];
+  /** The pages `files.list` answers in turn when counting (each the `files` of a page). */
+  countPages?: unknown[][];
   markdown?: string;
   commentPages?: { comments: unknown[]; nextPageToken?: string }[];
-  /** Comments by Doc id; a Doc not named gets the `commentPages`. */
-  commentsByDoc?: Record<string, unknown[]>;
-  /** What the Doc's metadata answers besides the defaults (name, modifiedTime, ...). */
+  /** What `comments.get` answers. */
+  comment?: Record<string, unknown>;
+  /** What the Doc's metadata answers besides the defaults (name, webViewLink). */
   info?: Record<string, unknown>;
-  /** The changes feed: the start token, then one page per `changes` request. */
-  startToken?: string;
-  changePages?: { changes: unknown[]; nextPageToken?: string; newStartPageToken?: string }[];
-  /** The lists and the comment calls wait for this before answering. */
-  gate?: Promise<void>;
+  /** What `documents.get` answers, in turn; the last one stays. */
+  documents?: unknown[];
+  /** `documents.batchUpdate` answers 400 "revision" when true. */
+  conflict?: boolean;
   /** Statuses to answer with first, one per request, before the real answers. */
-  failWith?: DriveFailure[];
+  failWith?: Failure[];
   /** Answer everything with this status, e.g. 404. */
   always?: number;
 };
 
-function listAnswer(data: DriveData, url: URL): unknown[] {
-  const q = url.searchParams.get("q") ?? "";
-  const recent = url.searchParams.get("orderBy")?.startsWith("viewedByMeTime") === true;
-  const own = q.includes("fullText")
-    ? data.searchFiles
-    : q.includes("starred=true")
-      ? data.starred
-      : q.includes("sharedWithMe=true")
-        ? data.shared
-        : recent
-          ? data.recent
-          : undefined;
-  return own ?? data.files ?? [];
-}
+/** A request the fake was sent, its body read. */
+export type Sent = { method: string; url: URL; body: string; contentType: string | null };
 
-function failure(next: DriveFailure | undefined, always: number | undefined): Response | null {
+function failure(next: Failure | undefined, always: number | undefined): Response | null {
   const status = next?.status ?? always;
   if (status === undefined) return null;
   const headers: Record<string, string> =
     next?.retryAfter === undefined ? {} : { "Retry-After": next.retryAfter };
-  return Response.json({ error: { message: "nope" } }, { status, headers });
+  return Response.json({ error: { message: next?.message ?? "nope" } }, { status, headers });
 }
 
-function commentsAnswer(
-  data: DriveData,
-  url: URL,
-  pages: NonNullable<DriveData["commentPages"]>,
-): Response {
-  const own = data.commentsByDoc?.[url.pathname.split("/").at(-2) ?? ""];
-  if (own !== undefined) return Response.json({ comments: own });
-  return Response.json(pages.shift() ?? { comments: [] });
+function docsAnswer(data: DriveData, sent: Sent, documents: unknown[]): Response {
+  if (sent.url.pathname.endsWith(":batchUpdate")) {
+    if (data.conflict === true) {
+      return Response.json(
+        {
+          error: {
+            message: "The required revision ID 'rev-1' does not match the latest revision.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    return Response.json({ documentId: DOC_ID, writeControl: { requiredRevisionId: "rev-after" } });
+  }
+  const document = documents.length > 1 ? documents.shift() : documents[0];
+  return Response.json(document ?? {});
 }
 
-/** The provider, the URLs it was asked for, and the most comment calls in flight at once. */
+/** `files.list`: the counting pages in turn when counting, else `files`. */
+function listAnswer(data: DriveData, sent: Sent, state: State): Response {
+  if (sent.url.searchParams.get("fields") === "files(id),nextPageToken" && data.countPages) {
+    const page = state.countPages.shift() ?? [];
+    const more = state.countPages.length > 0 ? { nextPageToken: "more" } : {};
+    return Response.json({ files: page, ...more });
+  }
+  return Response.json({ files: data.files ?? [], nextPageToken: data.nextPageToken });
+}
+
+function driveAnswer(data: DriveData, sent: Sent, state: State): Response {
+  const path = sent.url.pathname;
+  if (path.startsWith("/upload/drive/v3/files")) {
+    return Response.json({
+      id: "new-doc-id-12345",
+      name: "New",
+      webViewLink: "https://docs.google.com/document/d/new-doc-id-12345/edit",
+    });
+  }
+  if (path.endsWith("/export")) return new Response(data.markdown ?? "");
+  if (path.endsWith("/replies")) return Response.json({ id: "reply-1", content: "ok" });
+  if (path.endsWith("/comments"))
+    return Response.json(state.commentPages.shift() ?? { comments: [] });
+  if (path.includes("/comments/")) {
+    return Response.json({
+      id: path.split("/").at(-1),
+      content: "Please fix",
+      author: { displayName: "Maryam" },
+      ...data.comment,
+    });
+  }
+  if (path.endsWith("/files")) return listAnswer(data, sent, state);
+  return Response.json({
+    name: "Plan",
+    webViewLink: `https://docs.google.com/document/d/${DOC_ID}/edit`,
+    ...data.info,
+  });
+}
+
+type State = { commentPages: NonNullable<DriveData["commentPages"]>; countPages: unknown[][] };
+
+/** The provider, and every request it was sent with its body. */
 export function fakeDrive(data: DriveData = {}): {
   provider: FakeProvider;
   urls: URL[];
-  concurrency: () => number;
+  sent: Sent[];
 } {
   const urls: URL[] = [];
-  let inFlight = 0;
-  let peak = 0;
+  const sent: Sent[] = [];
   const failures = [...(data.failWith ?? [])];
-  const commentPages = [...(data.commentPages ?? [{ comments: [] }])];
-  const changePages = [...(data.changePages ?? [])];
+  const documents = [...(data.documents ?? [])];
+  const state: State = {
+    commentPages: [...(data.commentPages ?? [{ comments: [] }])],
+    countPages: [...(data.countPages ?? [])],
+  };
   const provider: FakeProvider = async (request) => {
     const url = new URL(request.url);
+    const each: Sent = {
+      method: request.method,
+      url,
+      body: await request.text(),
+      contentType: request.headers.get("Content-Type"),
+    };
     urls.push(url);
+    sent.push(each);
     const failed = failure(failures.shift(), data.always);
     if (failed !== null) return failed;
-    if (url.pathname.endsWith("/export")) return new Response(data.markdown ?? "");
-    if (url.pathname.endsWith("/changes/startPageToken")) {
-      return Response.json({ startPageToken: data.startToken ?? "start-1" });
-    }
-    if (url.pathname.endsWith("/changes")) {
-      return Response.json(changePages.shift() ?? { changes: [], newStartPageToken: "start-2" });
-    }
-    if (url.pathname.endsWith("/comments")) {
-      inFlight++;
-      peak = Math.max(peak, inFlight);
-      await data.gate;
-      await Bun.sleep(2);
-      inFlight--;
-      return commentsAnswer(data, url, commentPages);
-    }
-    if (url.pathname.endsWith("/files")) {
-      await data.gate;
-      return Response.json({ files: listAnswer(data, url), nextPageToken: data.nextPageToken });
-    }
-    return Response.json({
-      name: "Plan",
-      webViewLink: `https://docs.google.com/document/d/${DOC_ID}/edit`,
-      ...data.info,
-    });
+    if (url.hostname === "docs.googleapis.com") return docsAnswer(data, each, documents);
+    return driveAnswer(data, each, state);
   };
-  return { provider, urls, concurrency: () => peak };
+  return { provider, urls, sent };
+}
+
+// --- Documents ---------------------------------------------------------
+
+type Para = { text: string; style?: string; list?: string };
+
+/**
+ * A `documents.get` answer whose body holds these paragraphs, in order from
+ * index 1 (after the section break), each `text` ending with its newline.
+ */
+export function documentOf(paragraphs: Para[], revisionId = "rev-1"): unknown {
+  let at = 1;
+  const content: unknown[] = [{ endIndex: 1, sectionBreak: {} }];
+  for (const each of paragraphs) {
+    const start = at;
+    const end = start + each.text.length;
+    content.push({
+      startIndex: start,
+      endIndex: end,
+      paragraph: {
+        elements: [{ startIndex: start, endIndex: end, textRun: { content: each.text } }],
+        paragraphStyle: { namedStyleType: each.style ?? "NORMAL_TEXT" },
+        ...(each.list === undefined ? {} : { bullet: { listId: each.list, nestingLevel: 0 } }),
+      },
+    });
+    at = end;
+  }
+  return { documentId: DOC_ID, title: "Plan", revisionId, body: { content } };
 }

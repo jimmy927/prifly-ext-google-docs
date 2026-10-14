@@ -1,0 +1,191 @@
+import { expect, test } from "bun:test";
+import { batchBody, type Operation, type Plan, parseOperations, planEdit } from "../edit";
+import { parseStructure, type Structure } from "../structure";
+import { documentOf } from "./fake-drive";
+
+// Indexes: "Intro\n" 1–7 (heading), "Hello world\n" 7–19, "Second para\n" 19–31; body ends at 31.
+const STRUCTURE: Structure = parseStructure(
+  documentOf([
+    { text: "Intro\n", style: "HEADING_1" },
+    { text: "Hello world\n" },
+    { text: "Second para\n" },
+  ]),
+);
+const BODY = "Intro\nHello world\nSecond para\n";
+
+type Req = Record<string, Record<string, unknown>>;
+
+/**
+ * What Google does with the batch's text requests, in order, on the body
+ * text (index 1 is its first character). Style requests move nothing and are
+ * checked on their own.
+ */
+function apply(text: string, requests: Record<string, unknown>[]): string {
+  let body = text;
+  for (const raw of requests) {
+    const request = raw as Req;
+    const insert = request["insertText"];
+    const remove = request["deleteContentRange"];
+    const replace = request["replaceAllText"];
+    if (insert !== undefined) {
+      const index = (insert["location"] as { index: number }).index;
+      body = body.slice(0, index - 1) + String(insert["text"]) + body.slice(index - 1);
+    } else if (remove !== undefined) {
+      const { startIndex, endIndex } = remove["range"] as { startIndex: number; endIndex: number };
+      body = body.slice(0, startIndex - 1) + body.slice(endIndex - 1);
+    } else if (replace !== undefined) {
+      const find = (replace["containsText"] as { text: string }).text;
+      body = body.replaceAll(find, String(replace["replaceText"]));
+    }
+  }
+  return body;
+}
+
+function plan(ops: Operation[]): Plan {
+  const planned = planEdit(STRUCTURE, ops);
+  if (typeof planned === "string") throw new Error(planned);
+  return planned;
+}
+
+function parsed(raw: unknown[]): Operation[] {
+  const ops = parseOperations(raw);
+  if (typeof ops === "string") throw new Error(ops);
+  return ops;
+}
+
+test("inserts and deletes given low index first still land where the structure showed", () => {
+  const ops = parsed([
+    { type: "insert", text: "New. ", index: 7 },
+    { type: "delete_range", startIndex: 12, endIndex: 18 },
+    { type: "insert", text: "X", index: 19 },
+  ]);
+  const { requests } = plan(ops);
+  expect(apply(BODY, requests)).toBe("Intro\nNew. Hello\nXSecond para\n");
+  // Highest index first.
+  expect(requests.map((each) => Object.keys(each)[0])).toEqual([
+    "insertText",
+    "deleteContentRange",
+    "insertText",
+  ]);
+});
+
+test("a delete and an insert at one index replace the text; two inserts there keep their order", () => {
+  const swap = parsed([
+    { type: "insert", text: "Bye", index: 7 },
+    { type: "delete_range", startIndex: 7, endIndex: 12 },
+  ]);
+  expect(apply(BODY, plan(swap).requests)).toBe("Intro\nBye world\nSecond para\n");
+  const two = parsed([
+    { type: "insert", text: "A", index: 19 },
+    { type: "insert", text: "B", index: 19 },
+  ]);
+  expect(apply(BODY, plan(two).requests)).toBe("Intro\nHello world\nABSecond para\n");
+  const atEnd = parsed([
+    { type: "delete_range", startIndex: 7, endIndex: 12 },
+    { type: "insert", text: "!", index: 12 },
+  ]);
+  expect(apply(BODY, plan(atEnd).requests)).toBe("Intro\n! world\nSecond para\n");
+});
+
+test("insert after a heading makes normal-text paragraphs right under it", () => {
+  const { requests, lines } = plan(
+    parsed([{ type: "insert", text: "Body line\n", after_heading: " intro " }]),
+  );
+  expect(apply(BODY, requests)).toBe("Intro\nBody line\nHello world\nSecond para\n");
+  expect(requests[0]).toEqual({ insertText: { location: { index: 6 }, text: "\nBody line" } });
+  // The new paragraph is 7–17 after the insert: "Body line" and the heading's old newline.
+  expect(requests[1]).toEqual({
+    updateParagraphStyle: {
+      range: { startIndex: 7, endIndex: 17 },
+      paragraphStyle: { namedStyleType: "NORMAL_TEXT" },
+      fields: "namedStyleType",
+    },
+  });
+  expect(lines[0]).toContain('after the heading "Intro"');
+});
+
+test("insert after a heading combines with later edits by index", () => {
+  const ops = parsed([
+    { type: "insert", text: "Body", after_heading: "Intro" },
+    { type: "delete_range", startIndex: 19, endIndex: 26 },
+  ]);
+  expect(apply(BODY, plan(ops).requests)).toBe("Intro\nBody\nHello world\npara\n");
+});
+
+test("styles go first at the structure's indexes and replace_text goes last", () => {
+  const ops = parsed([
+    { type: "replace_text", find: "Hello", replace: "Hi" },
+    { type: "insert", text: "Top\n", index: 7 },
+    { type: "style", startIndex: 19, endIndex: 31, heading: 2, bold: true, bullet: true },
+  ]);
+  const { requests } = plan(ops);
+  expect(requests.map((each) => Object.keys(each)[0])).toEqual([
+    "updateParagraphStyle",
+    "updateTextStyle",
+    "createParagraphBullets",
+    "insertText",
+    "replaceAllText",
+  ]);
+  const range = { startIndex: 19, endIndex: 31 };
+  expect(requests[0]).toEqual({
+    updateParagraphStyle: {
+      range,
+      paragraphStyle: { namedStyleType: "HEADING_2" },
+      fields: "namedStyleType",
+    },
+  });
+  expect(requests[1]).toEqual({
+    updateTextStyle: { range, textStyle: { bold: true }, fields: "bold" },
+  });
+  expect(apply(BODY, requests)).toBe("Intro\nTop\nHi world\nSecond para\n");
+});
+
+test("the batch always holds the edit to the revision it was read at", () => {
+  const body = batchBody(plan(parsed([{ type: "insert", text: "x", index: 1 }])), "rev-1");
+  expect(body["writeControl"]).toEqual({ requiredRevisionId: "rev-1" });
+});
+
+test("the confirm lines show the exact text inserted, deleted and replaced", () => {
+  const { lines } = plan(
+    parsed([
+      { type: "delete_range", startIndex: 7, endIndex: 12 },
+      { type: "replace_text", find: "para", replace: "part", matchCase: false },
+    ]),
+  );
+  expect(lines[0]).toBe("1. Delete 7–12:\n    Hello");
+  expect(lines[1]).toBe('2. Replace every "para" (1 found, ignoring case) with:\n    part');
+});
+
+test("edits that cannot be built say why and build nothing", () => {
+  const error = (raw: unknown[]) => {
+    const ops = parseOperations(raw);
+    return typeof ops === "string" ? ops : planEdit(STRUCTURE, ops);
+  };
+  expect(
+    error([
+      { type: "delete_range", startIndex: 7, endIndex: 19 },
+      { type: "insert", text: "x", index: 10 },
+    ]),
+  ).toBe("Not sent: operations 1 and 2 touch the same text: split them into two edits.");
+  expect(
+    error([
+      { type: "delete_range", startIndex: 7, endIndex: 15 },
+      { type: "delete_range", startIndex: 12, endIndex: 19 },
+    ]),
+  ).toContain("touch the same text");
+  expect(error([{ type: "delete_range", startIndex: 20, endIndex: 31 }])).toContain(
+    "outside the body",
+  );
+  expect(error([{ type: "insert", text: "x", index: 31 }])).toContain("outside the body");
+  expect(error([{ type: "insert", text: "x", after_heading: "Nope" }])).toBe(
+    'Operation 1: no heading reads "Nope"; the headings are "Intro".',
+  );
+  expect(error([{ type: "replace_text", find: "absent", replace: "x" }])).toBe(
+    'Operation 1: "absent" is not in the Doc.',
+  );
+  expect(error([{ type: "style", startIndex: 1, endIndex: 5 }])).toBe(
+    "Operation 1: style needs heading, bold or bullet.",
+  );
+  expect(error([])).toBe("operations needs at least one operation");
+  expect(error([{ type: "rename" }])).toContain("unknown operation type");
+});

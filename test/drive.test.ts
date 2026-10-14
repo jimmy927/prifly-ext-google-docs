@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
 import {
   buildSearchQuery,
-  DriveHttpError,
-  DriveSignInError,
+  createReply,
   docInfo,
+  GoogleHttpError,
   listComments,
   parseDocId,
+  SignInError,
   searchDocs,
 } from "../drive";
 import { fakeConnections } from "./fake-api";
@@ -16,7 +17,9 @@ const signal = new AbortController().signal;
 function setup(data: DriveData = {}) {
   const drive = fakeDrive(data);
   const fake = fakeConnections({ accounts: [{ ...ACCOUNT }], provider: drive.provider });
-  const handle = { fetch: (url: string) => fake.connections.fetch("g1", url) };
+  const handle = {
+    fetch: (url: string, init?: RequestInit) => fake.connections.fetch("g1", url, init),
+  };
   return { ...fake, urls: drive.urls, handle };
 }
 
@@ -89,24 +92,33 @@ test("429 waits Retry-After and goes once more, then reports", async () => {
   const busy = { status: 503, retryAfter: "0" };
   const twice = setup({ failWith: [busy, busy] });
   const error = await docInfo(twice.handle, DOC_ID, signal).catch((e: unknown) => e);
-  expect(error).toBeInstanceOf(DriveHttpError);
-  expect((error as DriveHttpError).status).toBe(503);
+  expect(error).toBeInstanceOf(GoogleHttpError);
+  expect((error as GoogleHttpError).status).toBe(503);
   expect(twice.requests).toHaveLength(2);
 });
 
-test("a non-2xx answer becomes a DriveHttpError with Google's message", async () => {
-  const { handle } = setup({ always: 404 });
-  const error = await docInfo(handle, DOC_ID, signal).catch((e: unknown) => e);
-  expect(error).toBeInstanceOf(DriveHttpError);
-  expect((error as DriveHttpError).detail).toBe("nope");
+test("a write answered 429 is reported, never sent twice", async () => {
+  const busy = setup({ failWith: [{ status: 429, retryAfter: "0" }] });
+  const error = await createReply(busy.handle, DOC_ID, "c1", "ok", false, signal).catch(
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(GoogleHttpError);
+  expect(busy.requests).toHaveLength(1);
 });
 
-test("a revoked grant becomes a DriveSignInError naming the account", async () => {
+test("a non-2xx answer becomes a GoogleHttpError with Google's message", async () => {
+  const { handle } = setup({ always: 404 });
+  const error = await docInfo(handle, DOC_ID, signal).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(GoogleHttpError);
+  expect((error as GoogleHttpError).detail).toBe("nope");
+});
+
+test("a revoked grant becomes a SignInError naming the account", async () => {
   const { handle, endpoint } = setup();
   endpoint.revoke("g1");
   const error = await docInfo(handle, DOC_ID, signal).catch((e: unknown) => e);
-  expect(error).toBeInstanceOf(DriveSignInError);
-  expect((error as DriveSignInError).account).toBe("maryam@example.com");
+  expect(error).toBeInstanceOf(SignInError);
+  expect((error as SignInError).account).toBe("maryam@example.com");
 });
 
 test("every request carries the fake endpoint's token", async () => {

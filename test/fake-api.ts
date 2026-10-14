@@ -11,6 +11,7 @@
  */
 
 import type {
+  ConfirmSpec,
   Decoration,
   ExtensionApi,
   ExtensionConnection,
@@ -112,15 +113,20 @@ export function fakeConnections(
   const connections: ExtensionConnectionsApi = {
     list: (wanted) =>
       accounts.filter((each) => wanted === undefined || each.provider === wanted).map(view),
-    async fetch(id, request, _options?: ExtensionFetchOptions) {
+    async fetch(id, request, fetchOptions?: ExtensionFetchOptions) {
       const account = find(id);
       const token = endpoint.issue(id);
       if (token === null) return needsSignIn(account);
       // Two calls: Bun types a string and a Request as separate overloads of the constructor.
-      const sent = typeof request === "string" ? new Request(request) : new Request(request);
+      const sent =
+        typeof request === "string"
+          ? new Request(request, fetchOptions)
+          : new Request(request, fetchOptions);
       sent.headers.set("Authorization", `Bearer ${token}`);
       requests.push(sent);
-      return await provider(new Request(sent));
+      // A clone, so the test can still read the body of what was sent.
+      // (Bun types clone() with undici's Request: the same object at run time.)
+      return await provider(sent.clone() as Request);
     },
     async token(id) {
       const account = find(id);
@@ -168,14 +174,26 @@ export type FakeApi = {
   flags: Map<string, LauncherFlag | null>;
   notices: { text: string; tone: string | undefined; session: string | undefined }[];
   logs: { event: string; fields: Record<string, unknown> | undefined }[];
+  /** Every confirm card the extension asked, in order. */
+  confirms: ConfirmSpec[];
+  /** What the reader answers the next confirm cards; true unless a test says otherwise. */
+  confirmAnswer: { value: boolean };
+  /** Every status line set, in order. */
+  statuses: string[];
 };
 
-/** A fake `api`; parts left out of `options` are prifly's quiet defaults. */
+/**
+ * A fake `api`; parts left out of `options` are prifly's quiet defaults.
+ * `confirm: false` leaves `api.confirm` out, as a prifly before it does;
+ * `status: false` the same for `api.status`.
+ */
 export function fakeApi(
   options: {
     connections?: ExtensionConnectionsApi;
     settings?: SettingValues;
     folder?: string;
+    confirm?: boolean;
+    status?: boolean;
   } = {},
 ): FakeApi {
   let tools: ExtensionTool[] = [];
@@ -184,9 +202,23 @@ export function fakeApi(
     flags: new Map(),
     notices: [],
     logs: [],
+    confirms: [],
+    confirmAnswer: { value: true },
+    statuses: [],
   };
   const api: ExtensionApi = {
-    features: ["settings", "start-session", "session-lookup"],
+    features: ["settings", "start-session", "session-lookup", "confirm", "status"],
+    ...(options.confirm === false
+      ? {}
+      : {
+          confirm: async (spec: ConfirmSpec) => {
+            fake.confirms.push(spec);
+            return fake.confirmAnswer.value;
+          },
+        }),
+    ...(options.status === false
+      ? {}
+      : { status: (text: string) => void fake.statuses.push(text) }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.connections === undefined ? {} : { connections: options.connections }),
     tools: {

@@ -1,12 +1,14 @@
 /**
  * Which Google account the extension can use right now: one place deciding
- * the state, for the tools and (later) the launcher and the watcher.
+ * the state, for the tools and the status line.
  */
 
 import type { ExtensionApi, ExtensionConnection } from "@prifly/extension-api";
-import type { Drive } from "./drive";
 
-export const DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly";
+export const DOCS_SCOPE = "https://www.googleapis.com/auth/documents";
+export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
+/** What the extension asks Google for: read and write Docs, find and comment on them in Drive. */
+export const SCOPES = [DOCS_SCOPE, DRIVE_SCOPE];
 
 export type ConnectionState =
   | { kind: "no-api" }
@@ -15,19 +17,17 @@ export type ConnectionState =
   | { kind: "needs-sign-in"; connection: ExtensionConnection }
   | { kind: "ok"; connection: ExtensionConnection };
 
-/**
- * Prefers an ok connection that has the Drive scope; with several, the first.
- * `preferred`, the id of the connection the reader chose, is the only one
- * considered while it still exists.
- */
-export function connectionState(api: ExtensionApi, preferred?: string | null): ConnectionState {
+function hasScopes(connection: ExtensionConnection): boolean {
+  return SCOPES.every((scope) => connection.scopes.includes(scope));
+}
+
+/** Prefers an ok connection that has both scopes; with several, the first. */
+export function connectionState(api: ExtensionApi): ConnectionState {
   if (api.connections === undefined) return { kind: "no-api" };
-  const google = api.connections.list("google");
-  const chosen = google.filter((each) => each.id === preferred);
-  const all = chosen.length > 0 ? chosen : google;
+  const all = api.connections.list("google");
   const first = all[0];
   if (first === undefined) return { kind: "none" };
-  const withScope = all.filter((each) => each.scopes.includes(DRIVE_READONLY));
+  const withScope = all.filter(hasScopes);
   const usable = withScope.find((each) => each.state === "ok");
   if (usable !== undefined) return { kind: "ok", connection: usable };
   const expired = withScope[0];
@@ -35,15 +35,15 @@ export function connectionState(api: ExtensionApi, preferred?: string | null): C
   return { kind: "scope-missing", connection: first };
 }
 
-/** The sentence a tool answers with when the state is not ok. */
+/** The sentence a tool (and the status line) answers with when the state is not ok. */
 export function stateText(state: ConnectionState): string {
   switch (state.kind) {
     case "no-api":
       return "This version of prifly gives extensions no access to Google accounts: update prifly.";
     case "none":
-      return "No Google account is connected: connect one in prifly's Vault → Connections.";
+      return "No Google account is connected: ask a session to sign in to Google Docs, or connect one in prifly's Vault → Connections.";
     case "scope-missing":
-      return `${state.connection.account} has not given prifly read access to Drive yet. Open "From a Google Doc…" in prifly, or connect it again with Drive access in Vault → Connections.`;
+      return `${state.connection.account} has not given prifly access to read and edit Google Docs yet: ask a session to sign in to Google Docs, or connect it again in prifly's Vault → Connections.`;
     case "needs-sign-in":
       return signInText(state.connection.account);
     case "ok":
@@ -57,23 +57,17 @@ export function signInText(account: string): string {
 }
 
 /**
- * Asks the reader, in their browser, for Drive read access (more scopes on
- * `connection`, or a new account). For the launcher: a tool never calls it,
- * as it would open a browser behind a session's back.
+ * Asks the reader, in their browser, for Docs and Drive access: more scopes
+ * on the account they have, or a new account. Only the sign-in tool calls
+ * it, when the reader asked for it.
  */
-export async function askForDrive(api: ExtensionApi, connection?: ExtensionConnection) {
-  if (api.connections === undefined)
+export async function askForAccess(api: ExtensionApi, connection?: ExtensionConnection) {
+  if (api.connections === undefined) {
     return { ok: false as const, message: stateText({ kind: "no-api" }) };
+  }
   return await api.connections.signIn(
     "google",
-    [DRIVE_READONLY],
+    SCOPES,
     connection === undefined ? undefined : { connection: connection.id },
   );
-}
-
-/** A Drive handle for one connection: its fetch, token added by prifly. */
-export function driveFor(api: ExtensionApi, connection: ExtensionConnection): Drive | null {
-  const connections = api.connections;
-  if (connections === undefined) return null;
-  return { fetch: (url) => connections.fetch(connection.id, url) };
 }

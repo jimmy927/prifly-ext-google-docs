@@ -67,7 +67,7 @@ test("open comments render quoted text, author, date and indented replies", () =
     }),
   ]);
   expect(out).toBe(
-    "> the old text\n\n**Maryam** · 2026-10-01: Fix this\n  ↳ **Jimmy** · 2026-10-02: Done\n    mostly",
+    "> the old text\n\n**Maryam** · 2026-10-01: Fix this\n(comment id: c)\n  ↳ **Jimmy** · 2026-10-02: Done\n    mostly",
   );
 });
 

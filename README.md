@@ -1,27 +1,45 @@
 # prifly-ext-google-docs
 
-Your Google Docs in prifly:
+Your Google Docs in every prifly session. You ask in plain words; the session
+finds, reads, creates and edits Docs in place and answers their comments. It
+has no launcher, chip or panel of its own.
 
-- **From a Google Doc…** — a launcher with your Starred, Recent and Shared
-  Docs and a search over your Drive. The session starts knowing the whole Doc
-  as Markdown, with its open comments and pictures.
-- **Tools for every session** — `google_docs_search`, `google_docs_read`
-  (a Doc as Markdown, by id or link) and `google_docs_comments`.
-- **Change chip** — a session started from a Doc gets a chip on its banner
-  when the Doc is edited, offering "Send the changes" (or "Dismiss"). Nothing
-  reaches the session until you choose it. Drive is polled every
-  `refreshSeconds` (default 120); `state.json` in the extension's folder keeps
-  which session came from which Doc and the changes page token.
+Tools:
 
-Read-only: the extension asks Google for `drive.readonly` and never writes.
+- `google_docs_search`, `google_docs_read` (a Doc as Markdown, by id or link)
+  and `google_docs_comments` (the open comments, with their ids).
+- `google_docs_read_structure`: paragraphs with their start and end indexes,
+  style and list, and the Doc's `revisionId`.
+- `google_docs_create`: a new Doc from Markdown (Drive converts the upload).
+- `google_docs_edit`: replace text, insert after a heading or at an index,
+  delete a range, set a heading, bold or a bullet list. All of one call goes
+  out as one `documents.batchUpdate` with `writeControl.requiredRevisionId`,
+  so the same Doc changes in place and Google's version history keeps each
+  step. The requests are ordered so none moves the text a later one points at.
+  If the Doc changed since the read, nothing is written: the session reads it
+  again and rebuilds the edit. It never makes a copy.
+- `google_docs_comment_reply` and `google_docs_comment_resolve`.
+- `google_docs_api`: any Docs v1 or Drive v3 call with your account (other
+  hosts are refused), and `google_docs_api_docs`, which looks the method up in
+  Google's discovery documents.
+- `google_docs_sign_in`: asks you in the browser for Docs and Drive access.
+
+Reads run at once. Every write (create, edit, reply, resolve, and any
+`google_docs_api` call that is not a GET) is shown to you on a confirm card
+with the exact change first; Cancel sends nothing.
+
+Settings → Extensions shows one line: "Connected · 41 Docs in Drive", or what
+is in the way of the Google account. It is refreshed at most every 15 minutes.
 
 ## Account
 
 It uses a Google account connected in prifly's Vault → Connections, through
-`api.connections` — prifly holds the token and adds it to each request.
-`drive.readonly` is a restricted scope: it works on your own Google client
-(Vault → Connections → your client JSON) without Google's verification. The
-first use asks for it on an account that does not have it yet.
+`api.connections`: prifly holds the token and adds it to each request. It asks
+Google for `documents` and `drive`. An account connected for the earlier,
+read-only version approves once more: ask any session to sign in to Google
+Docs, or connect the account again in Vault → Connections. `drive` is a
+restricted scope: it works on your own Google client (Vault → Connections →
+your client JSON) without Google's verification.
 
 ## Develop
 
@@ -31,8 +49,10 @@ bun test && bunx tsc --noEmit && bunx biome check .
 ```
 
 Types come from `@prifly/extension-api`, pinned to a tag of
-`jimmy927/prifly-extension-api`. Tests run against `test/fake-api.ts`, a fake
-of prifly's `api` with a fake token endpoint and a fake Drive.
+`jimmy927/prifly-extension-api` (v0.6.0, which has `api.confirm` and
+`api.status`). Tests run against `test/fake-api.ts`, a fake of prifly's `api`
+with a fake token endpoint, and `test/fake-drive.ts`, a fake of the Drive and
+Docs APIs; they never call Google.
 
 ## License and contributing
 
