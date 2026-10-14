@@ -1,1 +1,3 @@
 node_modules/
+# Written by versions before 0.2.0 next to the extension (session → Doc links); no longer used.
+state.json

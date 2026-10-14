@@ -253,22 +253,40 @@ function planStyle(op: StyleOp, structure: Structure): [Request[], string] | str
   ];
 }
 
-function planReplace(op: ReplaceOp, structure: Structure): [Request, string] | string {
-  const text = bodyText(structure);
-  const found = op.matchCase
-    ? count(text, op.find)
-    : count(text.toLowerCase(), op.find.toLowerCase());
-  if (found === 0) return `${JSON.stringify(op.find)} is not in the Doc`;
-  const request = {
-    replaceAllText: {
-      containsText: { text: op.find, matchCase: op.matchCase },
-      replaceText: op.replace,
-    },
+function where(found: number, place: string): string | null {
+  return found === 0 ? null : `${found} in ${place}`;
+}
+
+/**
+ * `replaceAllText` held to the structure's tab (left out, Google replaces in
+ * every tab). It reaches the tab's headers, footers and footnotes too, and
+ * text this same edit inserts, as it runs last: the card counts all three.
+ */
+function planReplace(
+  op: ReplaceOp,
+  structure: Structure,
+  inserted: string,
+): [Request, string] | string {
+  const matches = (text: string) =>
+    op.matchCase ? count(text, op.find) : count(text.toLowerCase(), op.find.toLowerCase());
+  const body = matches(bodyText(structure));
+  const other = matches(structure.otherText);
+  const added = matches(inserted);
+  if (body + other === 0) return `${JSON.stringify(op.find)} is not in the Doc`;
+  const replaceAllText: Request = {
+    containsText: { text: op.find, matchCase: op.matchCase },
+    replaceText: op.replace,
   };
+  if (structure.tabId !== null) replaceAllText["tabsCriteria"] = { tabIds: [structure.tabId] };
+  const places = [
+    where(body, "the body"),
+    where(other, "headers, footers or footnotes"),
+    where(added, "text this edit inserts"),
+  ].filter((each) => each !== null);
   const how = op.matchCase ? "matching case" : "ignoring case";
   return [
-    request,
-    `Replace every ${JSON.stringify(op.find)} (${found} found, ${how}) with:\n${block(op.replace)}`,
+    { replaceAllText },
+    `Replace every ${JSON.stringify(op.find)} (${places.join(", ")}; ${how}) with:\n${block(op.replace)}`,
   ];
 }
 
@@ -304,7 +322,8 @@ function order(a: Step, b: Step): number {
   return b.given - a.given;
 }
 
-type Phases = { styles: Request[]; steps: Step[]; replaces: Request[] };
+/** The three phases, and the text the edit's inserts add (which replace_text also reaches). */
+type Phases = { styles: Request[]; steps: Step[]; replaces: Request[]; inserted: string };
 
 /** Puts one operation's requests in their phase; answers its confirm line, or what is wrong. */
 function planOne(
@@ -320,7 +339,7 @@ function planOne(
     return { line: planned[1] };
   }
   if (op.type === "replace_text") {
-    const planned = planReplace(op, structure);
+    const planned = planReplace(op, structure, phases.inserted);
     if (typeof planned === "string") return { error: planned };
     phases.replaces.push(planned[0]);
     return { line: planned[1] };
@@ -334,7 +353,11 @@ function planOne(
 
 /** The batch for `ops` against `structure`, or why it cannot be built. */
 export function planEdit(structure: Structure, ops: Operation[]): Plan | string {
-  const phases: Phases = { styles: [], steps: [], replaces: [] };
+  const inserted = ops
+    .map((each) => (each.type === "insert" ? each.text : ""))
+    .filter((each) => each !== "")
+    .join("\n");
+  const phases: Phases = { styles: [], steps: [], replaces: [], inserted };
   const lines: string[] = [];
   for (const [given, op] of ops.entries()) {
     const planned = planOne(op, given, structure, phases);

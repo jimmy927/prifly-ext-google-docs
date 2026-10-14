@@ -110,7 +110,7 @@ async function runEdit(
 }
 
 const OPERATIONS_DOC = `Each operation is one of:
-- {"type":"replace_text","find":"old","replace":"new","matchCase":true} — every occurrence;
+- {"type":"replace_text","find":"old","replace":"new","matchCase":true} — every occurrence in the first tab: its body, headers, footers and footnotes, and text the same edit inserts (it runs last);
 - {"type":"insert","text":"…","after_heading":"Heading text"} — new normal-text paragraph(s) right under that heading; or {"type":"insert","text":"…","index":42} — at that index as is (end text with \\n to make it its own paragraph);
 - {"type":"delete_range","startIndex":10,"endIndex":20} — end exclusive;
 - {"type":"style","startIndex":10,"endIndex":20,"heading":2,"bold":true,"bullet":true} — heading 0 is normal text; any of heading, bold, bullet.

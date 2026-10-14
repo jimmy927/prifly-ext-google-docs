@@ -140,6 +140,65 @@ test("styles go first at the structure's indexes and replace_text goes last", ()
   expect(apply(BODY, requests)).toBe("Intro\nTop\nHi world\nSecond para\n");
 });
 
+test("replace_text is held to the first tab and counts headers and inserted text on the card", () => {
+  const structure = parseStructure(
+    documentOf([{ text: "Hello world\n" }], "rev-1", { header: "world header\n", tabs: 3 }),
+  );
+  expect(structure.tabId).toBe("t.0");
+  expect(structure.paragraphs.map((each) => each.text)).toEqual(["Hello world\n"]);
+  const planned = planEdit(
+    structure,
+    parsed([
+      { type: "replace_text", find: "world", replace: "there" },
+      { type: "insert", text: "new world\n", index: 1 },
+    ]),
+  );
+  if (typeof planned === "string") throw new Error(planned);
+  expect(planned.requests.at(-1)).toEqual({
+    replaceAllText: {
+      containsText: { text: "world", matchCase: true },
+      replaceText: "there",
+      tabsCriteria: { tabIds: ["t.0"] },
+    },
+  });
+  expect(planned.lines[0]).toBe(
+    '1. Replace every "world" (1 in the body, 1 in headers, footers or footnotes, 1 in text this edit inserts; matching case) with:\n    there',
+  );
+});
+
+test("a find only in a header still counts as in the Doc", () => {
+  const structure = parseStructure(documentOf([{ text: "Hi\n" }], "rev-1", { header: "Draft\n" }));
+  const planned = planEdit(
+    structure,
+    parsed([{ type: "replace_text", find: "Draft", replace: "" }]),
+  );
+  expect(typeof planned === "string" ? planned : planned.lines[0]).toContain(
+    "1 in headers, footers or footnotes",
+  );
+});
+
+test("an answer without tabs reads the top-level body and sends no tabsCriteria", () => {
+  const structure = parseStructure({
+    documentId: "d",
+    revisionId: "r",
+    body: {
+      content: [
+        {
+          startIndex: 1,
+          endIndex: 4,
+          paragraph: { elements: [{ startIndex: 1, endIndex: 4, textRun: { content: "ab\n" } }] },
+        },
+      ],
+    },
+  });
+  expect(structure.tabId).toBeNull();
+  const planned = planEdit(structure, parsed([{ type: "replace_text", find: "ab", replace: "c" }]));
+  if (typeof planned === "string") throw new Error(planned);
+  expect(planned.requests[0]).toEqual({
+    replaceAllText: { containsText: { text: "ab", matchCase: true }, replaceText: "c" },
+  });
+});
+
 test("the batch always holds the edit to the revision it was read at", () => {
   const body = batchBody(plan(parsed([{ type: "insert", text: "x", index: 1 }])), "rev-1");
   expect(body["writeControl"]).toEqual({ requiredRevisionId: "rev-1" });
@@ -153,7 +212,7 @@ test("the confirm lines show the exact text inserted, deleted and replaced", () 
     ]),
   );
   expect(lines[0]).toBe("1. Delete 7–12:\n    Hello");
-  expect(lines[1]).toBe('2. Replace every "para" (1 found, ignoring case) with:\n    part');
+  expect(lines[1]).toBe('2. Replace every "para" (1 in the body; ignoring case) with:\n    part');
 });
 
 test("edits that cannot be built say why and build nothing", () => {

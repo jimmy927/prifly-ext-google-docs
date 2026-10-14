@@ -5,7 +5,7 @@
  * must name.
  */
 
-import { field, type Google, getJson, items, num, sendJson, str } from "./drive";
+import { field, type Google, getJson, isRecord, items, num, sendJson, str } from "./drive";
 
 export const DOCS_API = "https://docs.googleapis.com/v1";
 
@@ -31,10 +31,16 @@ export type Structure = {
   documentId: string;
   title: string;
   revisionId: string;
+  /** The first tab's id, which every edit is held to; null on an answer without tabs. */
+  tabId: string | null;
+  /** How many top-level tabs the Doc has; only the first is read and edited. */
+  tabCount: number;
   paragraphs: Paragraph[];
   runs: Run[];
   /** The body's end index: the last paragraph's closing newline is at `bodyEnd - 1`. */
   bodyEnd: number;
+  /** The text of the tab's headers, footers and footnotes, which replace_text also reaches. */
+  otherText: string;
 };
 
 /** Thrown when a Docs answer is not the shape the extension reads. */
@@ -94,14 +100,31 @@ function walk(content: unknown[], container: string | null, out: Paragraph[], ru
   }
 }
 
-/** The structure of a `documents.get` answer. */
+/** The text of a tab's headers, footers or footnotes (a map of id → `{ content }`). */
+function segmentsText(segments: unknown): string {
+  if (!isRecord(segments)) return "";
+  const paragraphs: Paragraph[] = [];
+  for (const each of Object.values(segments)) {
+    walk(items(field(each, "content")), null, paragraphs, []);
+  }
+  return paragraphs.map((each) => each.text).join("");
+}
+
+/**
+ * The structure of a `documents.get` answer: of its first tab when it has
+ * tabs (asked with `includeTabsContent`), else of the legacy top-level body.
+ */
 export function parseStructure(document: unknown): Structure {
   const documentId = str(field(document, "documentId"));
   const revisionId = str(field(document, "revisionId"));
   if (documentId === null || revisionId === null) {
     throw new StructureError("Google's answer named no documentId or revisionId");
   }
-  const content = items(field(field(document, "body"), "content"));
+  const tabs = items(field(document, "tabs"));
+  const first = tabs[0];
+  const tab = first === undefined ? document : field(first, "documentTab");
+  const tabId = first === undefined ? null : str(field(field(first, "tabProperties"), "tabId"));
+  const content = items(field(field(tab, "body"), "content"));
   const paragraphs: Paragraph[] = [];
   const runs: Run[] = [];
   walk(content, null, paragraphs, runs);
@@ -110,9 +133,14 @@ export function parseStructure(document: unknown): Structure {
     documentId,
     title: str(field(document, "title")) ?? "(untitled)",
     revisionId,
+    tabId,
+    tabCount: tabs.length,
     paragraphs,
     runs,
     bodyEnd: num(field(last, "endIndex")) ?? 1,
+    otherText: ["headers", "footers", "footnotes"]
+      .map((key) => segmentsText(field(tab, key)))
+      .join(""),
   };
 }
 
@@ -142,13 +170,14 @@ export function batchUpdateUrl(id: string): string {
   return `${documentUrl(id)}:batchUpdate`;
 }
 
-/** `documents.get`: the Doc's first tab, parsed. */
+/** `documents.get` with the tabs' content: the Doc's first tab, parsed. */
 export async function readStructure(
   google: Google,
   id: string,
   signal: AbortSignal,
 ): Promise<Structure> {
-  return parseStructure(await getJson(google, documentUrl(id), signal));
+  const url = `${documentUrl(id)}?includeTabsContent=true`;
+  return parseStructure(await getJson(google, url, signal));
 }
 
 /** `documents.batchUpdate`; answers the revisionId the Doc has after it. */
@@ -183,6 +212,11 @@ export function renderStructure(structure: Structure, link: string, from = 0): s
     link,
     `Doc id: ${structure.documentId}`,
     `revisionId: ${structure.revisionId}`,
+    ...(structure.tabCount > 1
+      ? [
+          `The Doc has ${structure.tabCount} tabs: this is the first, the only one google_docs_edit changes.`,
+        ]
+      : []),
     `Body ends at index ${structure.bodyEnd}. Indexes count UTF-16 code units; each paragraph's text ends with its newline at endIndex - 1, and [object] (a picture or break) takes one index.`,
     "",
     "startIndex–endIndex · style · list · text",

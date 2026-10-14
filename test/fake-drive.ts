@@ -141,10 +141,38 @@ export function fakeDrive(data: DriveData = {}): {
 type Para = { text: string; style?: string; list?: string };
 
 /**
- * A `documents.get` answer whose body holds these paragraphs, in order from
- * index 1 (after the section break), each `text` ending with its newline.
+ * A `documents.get` answer (with `includeTabsContent`) whose first tab, `t.0`,
+ * holds these paragraphs in order from index 1 (after the section break),
+ * each `text` ending with its newline; `header` is the text of one header,
+ * and `tabs` how many tabs the Doc has.
  */
-export function documentOf(paragraphs: Para[], revisionId = "rev-1"): unknown {
+export function documentOf(
+  paragraphs: Para[],
+  revisionId = "rev-1",
+  extra: { header?: string; tabs?: number } = {},
+): unknown {
+  const tab = (n: number, body: unknown) => ({
+    tabProperties: { tabId: `t.${n}`, index: n },
+    documentTab: body,
+  });
+  const headers =
+    extra.header === undefined
+      ? {}
+      : {
+          headers: {
+            "kix.h1": {
+              content: [{ paragraph: { elements: [{ textRun: { content: extra.header } }] } }],
+            },
+          },
+        };
+  const first = { body: { content: bodyContent(paragraphs) }, ...headers };
+  const others = Array.from({ length: (extra.tabs ?? 1) - 1 }, (_, n) =>
+    tab(n + 1, { body: { content: bodyContent([{ text: "Other tab\n" }]) } }),
+  );
+  return { documentId: DOC_ID, title: "Plan", revisionId, tabs: [tab(0, first), ...others] };
+}
+
+function bodyContent(paragraphs: Para[]): unknown[] {
   let at = 1;
   const content: unknown[] = [{ endIndex: 1, sectionBreak: {} }];
   for (const each of paragraphs) {
@@ -161,5 +189,5 @@ export function documentOf(paragraphs: Para[], revisionId = "rev-1"): unknown {
     });
     at = end;
   }
-  return { documentId: DOC_ID, title: "Plan", revisionId, body: { content } };
+  return content;
 }

@@ -16,6 +16,9 @@ Tools:
   out as one `documents.batchUpdate` with `writeControl.requiredRevisionId`,
   so the same Doc changes in place and Google's version history keeps each
   step. The requests are ordered so none moves the text a later one points at.
+  Structure and edits cover the Doc's first tab; `replace_text` is held to
+  that tab and also reaches its headers, footers and footnotes, which the
+  confirm card counts.
   If the Doc changed since the read, nothing is written: the session reads it
   again and rebuilds the edit. It never makes a copy.
 - `google_docs_comment_reply` and `google_docs_comment_resolve`.

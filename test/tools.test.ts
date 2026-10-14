@@ -60,14 +60,98 @@ test("search lists title, id, editor, time and link", async () => {
     `1. Q3 plan\n   Doc id: ${DOC_ID} · edited by Maryam · 3 h ago\n   ${EDIT_URL}`,
   );
   expect(urls[0]?.searchParams.get("q")).toContain("fullText contains 'Bob\\'s plan'");
+  expect(await setup().callTool("google_docs_search", { query: "zzz" })).toBe(
+    'No Docs matched "zzz".',
+  );
 });
 
 test("read gives a title and link header, then the Markdown with pictures as placeholders", async () => {
-  const { callTool } = setup({ markdown: "Hello ![](data:image/png;base64,AAAA)\n" });
+  const { callTool, urls } = setup({ markdown: "Hello ![](data:image/png;base64,AAAA)\n" });
   const text = await callTool("google_docs_read", {
     doc: `https://docs.google.com/document/u/1/d/${DOC_ID}/edit`,
   });
   expect(text).toBe(`# Plan\n${EDIT_URL}\n\nHello [picture 1]`);
+  const exported = urls.find((url) => url.pathname.endsWith("/export"));
+  expect(exported?.pathname).toBe(`/drive/v3/files/${DOC_ID}/export`);
+  expect(exported?.searchParams.get("mimeType")).toBe("text/markdown");
+});
+
+test("read cuts a long Doc and offset reads on", async () => {
+  const { callTool } = setup({ markdown: `${"a".repeat(60_000)}${"b".repeat(10)}` });
+  const first = await callTool("google_docs_read", { doc: DOC_ID });
+  expect(first).toContain("with offset 60000 to read on");
+  expect(await callTool("google_docs_read", { doc: DOC_ID, offset: 60_000 })).toEndWith(
+    `\n\n${"b".repeat(10)}`,
+  );
+});
+
+test("tools on one Doc answer a link that is no Doc with a sentence, and send nothing", async () => {
+  const { callTool, requests } = setup();
+  for (const name of [
+    "google_docs_read",
+    "google_docs_read_structure",
+    "google_docs_comments",
+    "google_docs_comment_reply",
+  ]) {
+    expect(await callTool(name, { doc: "hello there", commentId: "c1", text: "x" })).toContain(
+      '"hello there" is not a Google Doc id',
+    );
+  }
+  expect(requests).toHaveLength(0);
+});
+
+test("comments hide resolved ones by default and show them on request", async () => {
+  const comments = [
+    {
+      id: "1",
+      content: "Open one",
+      author: { displayName: "Maryam" },
+      quotedFileContent: { value: "line" },
+    },
+    { id: "2", content: "Closed one", resolved: true, author: { displayName: "Jimmy" } },
+  ];
+  const { callTool } = setup({ commentPages: [{ comments }, { comments }] });
+  const open = await callTool("google_docs_comments", { doc: DOC_ID });
+  expect(open).toContain("> line\n\n**Maryam**: Open one");
+  expect(open).not.toContain("Closed one");
+  const all = await callTool("google_docs_comments", { doc: DOC_ID, includeResolved: true });
+  expect(all).toContain("Closed one");
+  expect(await setup().callTool("google_docs_comments", { doc: DOC_ID })).toBe(
+    "No open comments on this Doc.",
+  );
+});
+
+test("a Doc Google does not know answers in one sentence", async () => {
+  const { callTool } = setup({ always: 404 });
+  expect(await callTool("google_docs_read", { doc: DOC_ID })).toBe(
+    `No Doc with id ${DOC_ID} that this account can read.`,
+  );
+  expect(await callTool("google_docs_read_structure", { doc: DOC_ID })).toBe(
+    `No Doc with id ${DOC_ID} that this account can read.`,
+  );
+  expect(await setup({ always: 403 }).callTool("google_docs_search", {})).toBe(
+    "Google answered 403: nope.",
+  );
+});
+
+test("a busy Google is retried once, then reported", async () => {
+  const busy = { status: 429, retryAfter: "0" };
+  expect(await setup({ failWith: [busy] }).callTool("google_docs_comments", { doc: DOC_ID })).toBe(
+    "No open comments on this Doc.",
+  );
+  expect(await setup({ failWith: [busy, busy] }).callTool("google_docs_search", {})).toBe(
+    "Google is busy (429): try again in a minute.",
+  );
+});
+
+test("every request carries the token of the connection", async () => {
+  const { callTool, requests } = setup({ documents: [DOC] });
+  for (const [name, args] of READS) await callTool(name, args);
+  await callTool("google_docs_edit", EDIT);
+  expect(requests.length).toBeGreaterThanOrEqual(7);
+  for (const request of requests) {
+    expect(request.headers.get("Authorization")).toMatch(/^Bearer token-g1-\d+$/);
+  }
 });
 
 test("read_structure shows each paragraph's indexes, style and list, and the revisionId", async () => {
@@ -78,6 +162,16 @@ test("read_structure shows each paragraph's indexes, style and list, and the rev
   expect(text).toContain('1–7 · HEADING_1 "Intro"');
   expect(text).toContain('7–19 · NORMAL_TEXT "Hello world"');
   expect(text).toContain('19–24 · NORMAL_TEXT · list kix.list1 level 0 "Item"');
+  expect(text).not.toContain("tabs");
+});
+
+test("read_structure asks for the tabs' content and says when only the first tab is shown", async () => {
+  const doc = documentOf([{ text: "Hi\n" }], "rev-1", { tabs: 2 });
+  const fake = setup({ documents: [doc] });
+  const text = await fake.callTool("google_docs_read_structure", { doc: DOC_ID });
+  expect(fake.sent[0]?.url.searchParams.get("includeTabsContent")).toBe("true");
+  expect(text).toContain("The Doc has 2 tabs: this is the first");
+  expect(text).not.toContain("Other tab");
 });
 
 test("comments show each comment's id for a reply", async () => {
@@ -116,7 +210,7 @@ test("an edit is confirmed with the exact change, then sent as one batchUpdate h
   expect(card?.details).toContain(`Doc: Plan (${DOC_ID})`);
   expect(card?.details).toContain("1. Insert at index 7:\n    New. ");
   expect(card?.details).toContain(
-    '2. Replace every "world" (1 found, matching case) with:\n    there',
+    '2. Replace every "world" (1 in the body; matching case) with:\n    there',
   );
   expect(card?.details).toContain(
     `POST https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
@@ -263,6 +357,16 @@ test("a grant Google ended answers with the sign-in text", async () => {
   const text =
     "Google ended the sign-in for maryam@example.com: sign in again in prifly's Vault → Connections.";
   for (const [name, args] of READS) expect(await revoked.callTool(name, args)).toBe(text);
+  expect(revoked.signIns).toEqual([]);
+
+  // Listed as ok, but Google ends the grant when the request goes out.
+  const midUse = setup({ documents: [DOC] });
+  const listed = midUse.connections.list;
+  midUse.connections.list = (provider) =>
+    listed(provider).map((each) => ({ ...each, state: "ok" as const }));
+  midUse.endpoint.revoke("g1");
+  for (const [name, args] of READS) expect(await midUse.callTool(name, args)).toBe(text);
+  expect(midUse.signIns).toEqual([]);
 });
 
 test("the sign-in tool asks for Docs and Drive on the account that lacks them", async () => {
@@ -290,5 +394,7 @@ test("the state wants both scopes on an ok connection", async () => {
 test("relative times read like a person would say them", () => {
   const now = Date.parse("2026-10-11T12:00:00Z");
   expect(relativeTime("2026-10-11T11:59:50Z", now)).toBe("just now");
+  expect(relativeTime("2026-10-11T11:15:00Z", now)).toBe("45 min ago");
   expect(relativeTime("2026-10-10T08:00:00Z", now)).toBe("yesterday");
+  expect(relativeTime(null, now)).toBe("at an unknown time");
 });
