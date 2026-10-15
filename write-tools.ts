@@ -17,8 +17,17 @@ import {
   getComment,
   replyUrl,
 } from "./drive";
-import { batchBody, type Operation, parseOperations, planEdit } from "./edit";
+import { batchBody, contentOf, type Operation, parseOperations, planEdit, summaryOf } from "./edit";
 import { batchUpdate, batchUpdateUrl, readStructure } from "./structure";
+
+const BODY_START = 1500;
+
+/** The start of the new Doc's body, with how much more there is. */
+function startOf(markdown: string): string {
+  if (markdown.length <= BODY_START) return markdown;
+  const more = markdown.length - BODY_START;
+  return `${markdown.slice(0, BODY_START)}…\n(${more} more characters)`;
+}
 
 function createTool(api: ExtensionApi): ExtensionTool {
   return {
@@ -40,8 +49,9 @@ function createTool(api: ExtensionApi): ExtensionTool {
       return await withGoogle(api, ctx.signal, null, async (google, signal) => {
         const refused = await ask(api, {
           title: "Create a Google Doc",
-          summary: `Create the Google Doc "${title}" in your Drive`,
-          details: `Title: ${title}\n\n${markdown}\n\n---\nPOST ${CREATE_URL}\n(Markdown converted to a Google Doc by Drive)`,
+          summary: `Create the Google Doc ${JSON.stringify(title)} in your Drive.`,
+          content: `Title: ${title}\n\n${startOf(markdown)}`,
+          details: `POST ${CREATE_URL}\n(Markdown converted to a Google Doc by Drive)`,
         });
         if (refused !== null) return refused;
         const created = await createDoc(google, title, markdown, signal);
@@ -82,14 +92,12 @@ async function runEdit(
   const body = batchBody(plan, revisionId);
   const refused = await ask(api, {
     title: "Edit a Google Doc",
-    summary: `Change "${structure.title}" in place (${ops.length} ${ops.length === 1 ? "change" : "changes"})`,
+    summary: summaryOf(plan, structure.title),
+    content: contentOf(plan),
     details: [
-      `Doc: ${structure.title} (${id})`,
+      `Doc id: ${id}`,
       `revisionId: ${revisionId}`,
       "",
-      ...plan.lines,
-      "",
-      "---",
       `POST ${batchUpdateUrl(id)}`,
       JSON.stringify(body, null, 2),
     ].join("\n"),
@@ -185,14 +193,15 @@ async function runReply(
   const verb = how.resolve ? "Resolve" : "Reply to";
   const refused = await ask(api, {
     title: how.resolve ? "Resolve a comment" : "Reply to a comment",
-    summary: `${verb} ${comment.author}'s comment on "${info.name}"`,
-    details: [
-      `Doc: ${info.name} (${doc})`,
+    summary: `${verb} ${comment.author}'s comment on ${JSON.stringify(info.name)}.`,
+    content: [
       quoteComment(comment),
       "",
-      reply === "" ? "(no reply text)" : `Reply:\n${reply}`,
-      "",
-      "---",
+      reply === "" ? "(no reply text)" : `Your reply:\n${reply}`,
+    ].join("\n"),
+    details: [
+      `Doc id: ${doc}`,
+      `Comment id: ${commentId}`,
       `POST ${replyUrl(doc, commentId)}`,
       JSON.stringify(how.resolve ? { content: reply, action: "resolve" } : { content: reply }),
     ].join("\n"),

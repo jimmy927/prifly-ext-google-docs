@@ -5,7 +5,7 @@ import { askForAccess, connectionState, DOCS_SCOPE, DRIVE_SCOPE } from "../conne
 import { registerTools, relativeTime } from "../tools";
 import { type FakeAccount, fakeApi, fakeConnections } from "./fake-api";
 import { ACCOUNT, DOC_ID, documentOf } from "./fake-drive";
-import { setup } from "./helpers";
+import { expectPlainCard, setup } from "./helpers";
 
 const EDIT_URL = `https://docs.google.com/document/d/${DOC_ID}/edit`;
 
@@ -206,15 +206,18 @@ test("an edit is confirmed with the exact change, then sent as one batchUpdate h
   expect(answer).toContain('Done: "Plan" changed in place (2 changes). New revisionId: rev-after.');
   expect(fake.confirms).toHaveLength(1);
   const card = fake.confirms[0];
-  expect(card?.summary).toBe('Change "Plan" in place (2 changes)');
-  expect(card?.details).toContain(`Doc: Plan (${DOC_ID})`);
-  expect(card?.details).toContain("1. Insert at index 7:\n    New. ");
-  expect(card?.details).toContain(
-    '2. Replace every "world" (1 in the body; matching case) with:\n    there',
+  expect(card?.summary).toBe('Make 2 changes to "Plan".');
+  expect(card?.content).toBe(
+    "1. Insert:\n    New. \n\n2. Replace every match (1 in the body; matching case):\n    world\n  →\n    there",
   );
-  expect(card?.details).toContain(
+  expect(card?.content).not.toContain(DOC_ID);
+  expect(card?.summary).not.toContain(DOC_ID);
+  expectPlainCard(card, [
+    `Doc id: ${DOC_ID}`,
+    "revisionId: rev-1",
     `POST https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
-  );
+    "requiredRevisionId",
+  ]);
   const [write] = fake.writes();
   expect(fake.writes()).toHaveLength(1);
   expect(write?.url.pathname).toBe(`/v1/documents/${DOC_ID}:batchUpdate`);
@@ -273,7 +276,10 @@ test("create is confirmed with the Markdown, then uploaded as a Doc", async () =
   expect(answer).toBe(
     'Created "New".\nDoc id: new-doc-id-12345\nhttps://docs.google.com/document/d/new-doc-id-12345/edit',
   );
-  expect(fake.confirms[0]?.details).toContain("Title: Notes\n\n# Hi\n");
+  const card = fake.confirms[0];
+  expect(card?.summary).toBe('Create the Google Doc "Notes" in your Drive.');
+  expect(card?.content).toBe("Title: Notes\n\n# Hi\n");
+  expectPlainCard(card, ["POST https://www.googleapis.com/upload/drive/v3/files"]);
   const [upload] = fake.writes();
   expect(upload?.url.pathname).toBe("/upload/drive/v3/files");
   expect(upload?.url.searchParams.get("uploadType")).toBe("multipart");
@@ -290,12 +296,25 @@ test("reply and resolve are confirmed with the comment, then posted as Drive rep
     text: "Done",
   });
   expect(replied).toBe('Replied to Maryam\'s comment on "Plan".');
-  expect(fake.confirms[0]?.details).toContain("Maryam wrote: Please fix");
+  const card = fake.confirms[0];
+  expect(card?.summary).toBe('Reply to Maryam\'s comment on "Plan".');
+  expect(card?.content).toContain("Maryam wrote: Please fix");
+  expect(card?.content).toContain("Your reply:\nDone");
+  expect(card?.content).not.toContain("c1");
+  expect(card?.summary).not.toContain(DOC_ID);
+  expectPlainCard(card, [
+    `Doc id: ${DOC_ID}`,
+    "Comment id: c1",
+    "/comments/c1/replies",
+    '{"content":"Done"}',
+  ]);
   const resolved = await fake.callTool("google_docs_comment_resolve", {
     doc: DOC_ID,
     commentId: "c1",
   });
   expect(resolved).toBe('Resolved Maryam\'s comment on "Plan".');
+  expect(fake.confirms[1]?.summary).toBe('Resolve Maryam\'s comment on "Plan".');
+  expectPlainCard(fake.confirms[1], ['"action":"resolve"']);
   const [reply, resolve] = fake.writes();
   expect(reply?.url.pathname).toBe(`/drive/v3/files/${DOC_ID}/comments/c1/replies`);
   expect(JSON.parse(reply?.body ?? "")).toEqual({ content: "Done" });

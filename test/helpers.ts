@@ -1,5 +1,6 @@
 /** What the tool tests share: the tools over a fake account and a fake Google, and a clock to drive. */
 
+import { expect } from "bun:test";
 import type { TimerHandle, Timers } from "../timers";
 import { registerTools } from "../tools";
 import { type FakeAccount, fakeApi, fakeConnections } from "./fake-api";
@@ -58,4 +59,19 @@ export class FakeTimers implements Timers {
 /** Lets the promises a refresh started finish. */
 export async function settle(): Promise<void> {
   await Bun.sleep(15);
+}
+
+/** A card's human parts (summary, content) hold none of the technical bits, which belong in details. */
+export function expectPlainCard(
+  card: { summary: string; content?: string; details: string } | undefined,
+  technical: string[],
+): void {
+  if (card === undefined) throw new Error("no confirm card was asked");
+  for (const part of [card.summary, card.content ?? ""]) {
+    for (const bit of [...technical, "https://", "POST ", "DELETE ", '"requests"', "revisionId"]) {
+      expect(part).not.toContain(bit);
+    }
+  }
+  expect(card.summary).not.toContain("\n");
+  for (const bit of technical) expect(card.details).toContain(bit);
 }

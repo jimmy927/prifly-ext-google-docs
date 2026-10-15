@@ -29,11 +29,38 @@ export type Operation = ReplaceOp | InsertOp | DeleteOp | StyleOp;
 
 type Request = Record<string, unknown>;
 
+/** What one operation does, for the reader: no indexes, ids or JSON. */
+type Note = {
+  /** The sentence for the card's summary, once the Doc's title is known. */
+  sentence: (title: string) => string;
+  /** The block for the card's content: the text inserted, deleted or replaced. */
+  content: string;
+};
+
 export type Plan = {
   requests: Request[];
-  /** One line (or block) per operation, in the order given: what the reader confirms. */
-  lines: string[];
+  /** One note per operation, in the order given. */
+  notes: Note[];
 };
+
+/** The card's summary: one plain sentence that names the Doc by its title. */
+export function summaryOf(plan: Plan, title: string): string {
+  const [only] = plan.notes;
+  if (plan.notes.length === 1 && only !== undefined) return only.sentence(title);
+  return `Make ${plan.notes.length} changes to ${JSON.stringify(title)}.`;
+}
+
+/** The card's content: each operation's text, numbered when there are several. */
+export function contentOf(plan: Plan): string {
+  if (plan.notes.length === 1) return plan.notes[0]?.content ?? "";
+  return plan.notes.map((each, i) => `${i + 1}. ${each.content}`).join("\n\n");
+}
+
+/** A short quoted form of some text, for a sentence. */
+function brief(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return JSON.stringify(flat.length <= 40 ? flat : `${flat.slice(0, 39)}…`);
+}
 
 // --- Reading the arguments --------------------------------------------
 
@@ -165,7 +192,7 @@ function findHeading(structure: Structure, wanted: string): Paragraph | string {
   return `no heading reads "${wanted}"${known === "" ? " (the Doc has no headings)" : `; the headings are ${known}`}`;
 }
 
-function planInsert(op: InsertOp, structure: Structure, given: number): [Step, string] | string {
+function planInsert(op: InsertOp, structure: Structure, given: number): [Step, Note] | string {
   if (op.afterHeading === null) {
     if (op.index < 1 || op.index >= structure.bodyEnd) {
       return `insert's index ${op.index} is outside the body (1 to ${structure.bodyEnd - 1})`;
@@ -173,7 +200,10 @@ function planInsert(op: InsertOp, structure: Structure, given: number): [Step, s
     const request = { insertText: { location: { index: op.index }, text: op.text } };
     return [
       { at: op.index, given, kind: "insert", requests: [request] },
-      `Insert at index ${op.index}:\n${block(op.text)}`,
+      {
+        sentence: (title) => `Insert new text into ${JSON.stringify(title)}.`,
+        content: `Insert:\n${block(op.text)}`,
+      },
     ];
   }
   const heading = findHeading(structure, op.afterHeading);
@@ -195,18 +225,26 @@ function planInsert(op: InsertOp, structure: Structure, given: number): [Step, s
   ];
   return [
     { at, given, kind: "insert", requests },
-    `Insert after the heading ${JSON.stringify(heading.text.trim())} (index ${heading.endIndex}):\n${block(body)}`,
+    {
+      sentence: (title) =>
+        `Insert new text under the heading ${JSON.stringify(heading.text.trim())} in ${JSON.stringify(title)}.`,
+      content: `Insert after the heading ${JSON.stringify(heading.text.trim())}:\n${block(body)}`,
+    },
   ];
 }
 
-function planDelete(op: DeleteOp, structure: Structure, given: number): [Step, string] | string {
+function planDelete(op: DeleteOp, structure: Structure, given: number): [Step, Note] | string {
   if (op.startIndex < 1 || op.endIndex > structure.bodyEnd - 1) {
     return `delete_range ${op.startIndex}–${op.endIndex} is outside the body (1 to ${structure.bodyEnd - 1}; the body's last newline stays)`;
   }
   const range = { startIndex: op.startIndex, endIndex: op.endIndex };
+  const gone = textInRange(structure.runs, op.startIndex, op.endIndex);
   return [
     { at: op.startIndex, given, kind: "delete", requests: [{ deleteContentRange: { range } }] },
-    `Delete ${op.startIndex}–${op.endIndex}:\n${block(textInRange(structure.runs, op.startIndex, op.endIndex))}`,
+    {
+      sentence: (title) => `Delete ${brief(gone)} from ${JSON.stringify(title)}.`,
+      content: `Delete:\n${block(gone)}`,
+    },
   ];
 }
 
@@ -230,7 +268,7 @@ function styleRequests(op: StyleOp): Request[] {
   return requests;
 }
 
-function planStyle(op: StyleOp, structure: Structure): [Request[], string] | string {
+function planStyle(op: StyleOp, structure: Structure): [Request[], Note] | string {
   if (op.startIndex < 1 || op.endIndex > structure.bodyEnd) {
     return `style ${op.startIndex}–${op.endIndex} is outside the body (1 to ${structure.bodyEnd})`;
   }
@@ -249,7 +287,11 @@ function planStyle(op: StyleOp, structure: Structure): [Request[], string] | str
   const excerpt = textInRange(structure.runs, op.startIndex, op.endIndex).replace(/\n$/, "");
   return [
     styleRequests(op),
-    `Style ${op.startIndex}–${op.endIndex} as ${what.join(", ")}:\n${block(excerpt)}`,
+    {
+      sentence: (title) =>
+        `Format ${brief(excerpt)} in ${JSON.stringify(title)} as ${what.join(", ")}.`,
+      content: `Format as ${what.join(", ")}:\n${block(excerpt)}`,
+    },
   ];
 }
 
@@ -266,7 +308,7 @@ function planReplace(
   op: ReplaceOp,
   structure: Structure,
   inserted: string,
-): [Request, string] | string {
+): [Request, Note] | string {
   const matches = (text: string) =>
     op.matchCase ? count(text, op.find) : count(text.toLowerCase(), op.find.toLowerCase());
   const body = matches(bodyText(structure));
@@ -284,9 +326,14 @@ function planReplace(
     where(added, "text this edit inserts"),
   ].filter((each) => each !== null);
   const how = op.matchCase ? "matching case" : "ignoring case";
+  const total = body + other + added;
   return [
     { replaceAllText },
-    `Replace every ${JSON.stringify(op.find)} (${places.join(", ")}; ${how}) with:\n${block(op.replace)}`,
+    {
+      sentence: (title) =>
+        `Replace ${total} ${total === 1 ? "match" : "matches"} of ${brief(op.find)} with ${brief(op.replace)} in ${JSON.stringify(title)}.`,
+      content: `Replace every match (${places.join(", ")}; ${how}):\n${block(op.find)}\n  →\n${block(op.replace)}`,
+    },
   ];
 }
 
@@ -325,30 +372,30 @@ function order(a: Step, b: Step): number {
 /** The three phases, and the text the edit's inserts add (which replace_text also reaches). */
 type Phases = { styles: Request[]; steps: Step[]; replaces: Request[]; inserted: string };
 
-/** Puts one operation's requests in their phase; answers its confirm line, or what is wrong. */
+/** Puts one operation's requests in their phase; answers what the reader is told of it, or what is wrong. */
 function planOne(
   op: Operation,
   given: number,
   structure: Structure,
   phases: Phases,
-): { line: string } | { error: string } {
+): { note: Note } | { error: string } {
   if (op.type === "style") {
     const planned = planStyle(op, structure);
     if (typeof planned === "string") return { error: planned };
     phases.styles.push(...planned[0]);
-    return { line: planned[1] };
+    return { note: planned[1] };
   }
   if (op.type === "replace_text") {
     const planned = planReplace(op, structure, phases.inserted);
     if (typeof planned === "string") return { error: planned };
     phases.replaces.push(planned[0]);
-    return { line: planned[1] };
+    return { note: planned[1] };
   }
   const planned =
     op.type === "insert" ? planInsert(op, structure, given) : planDelete(op, structure, given);
   if (typeof planned === "string") return { error: planned };
   phases.steps.push(planned[0]);
-  return { line: planned[1] };
+  return { note: planned[1] };
 }
 
 /** The batch for `ops` against `structure`, or why it cannot be built. */
@@ -358,11 +405,11 @@ export function planEdit(structure: Structure, ops: Operation[]): Plan | string 
     .filter((each) => each !== "")
     .join("\n");
   const phases: Phases = { styles: [], steps: [], replaces: [], inserted };
-  const lines: string[] = [];
+  const notes: Note[] = [];
   for (const [given, op] of ops.entries()) {
     const planned = planOne(op, given, structure, phases);
     if ("error" in planned) return `Operation ${given + 1}: ${planned.error}.`;
-    lines.push(`${given + 1}. ${planned.line}`);
+    notes.push(planned.note);
   }
   const clashing = findClash(phases.steps, ops);
   if (clashing !== null) return `Not sent: ${clashing}.`;
@@ -372,7 +419,7 @@ export function planEdit(structure: Structure, ops: Operation[]): Plan | string 
     ...steps.flatMap((each) => each.requests),
     ...phases.replaces,
   ];
-  return { requests, lines };
+  return { requests, notes };
 }
 
 /** The whole `documents.batchUpdate` body: the requests, held to the revision they were read at. */

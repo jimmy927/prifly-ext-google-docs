@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { batchBody, type Operation, type Plan, parseOperations, planEdit } from "../edit";
+import {
+  batchBody,
+  contentOf,
+  type Operation,
+  type Plan,
+  parseOperations,
+  planEdit,
+  summaryOf,
+} from "../edit";
 import { parseStructure, type Structure } from "../structure";
 import { documentOf } from "./fake-drive";
 
@@ -88,7 +96,7 @@ test("a delete and an insert at one index replace the text; two inserts there ke
 });
 
 test("insert after a heading makes normal-text paragraphs right under it", () => {
-  const { requests, lines } = plan(
+  const { requests, notes } = plan(
     parsed([{ type: "insert", text: "Body line\n", after_heading: " intro " }]),
   );
   expect(apply(BODY, requests)).toBe("Intro\nBody line\nHello world\nSecond para\n");
@@ -101,7 +109,8 @@ test("insert after a heading makes normal-text paragraphs right under it", () =>
       fields: "namedStyleType",
     },
   });
-  expect(lines[0]).toContain('after the heading "Intro"');
+  expect(notes[0]?.content).toBe('Insert after the heading "Intro":\n    Body line');
+  expect(notes[0]?.sentence("Plan")).toBe('Insert new text under the heading "Intro" in "Plan".');
 });
 
 test("insert after a heading combines with later edits by index", () => {
@@ -161,8 +170,11 @@ test("replace_text is held to the first tab and counts headers and inserted text
       tabsCriteria: { tabIds: ["t.0"] },
     },
   });
-  expect(planned.lines[0]).toBe(
-    '1. Replace every "world" (1 in the body, 1 in headers, footers or footnotes, 1 in text this edit inserts; matching case) with:\n    there',
+  expect(planned.notes[0]?.content).toBe(
+    "Replace every match (1 in the body, 1 in headers, footers or footnotes, 1 in text this edit inserts; matching case):\n    world\n  →\n    there",
+  );
+  expect(planned.notes[0]?.sentence("Budget plan")).toBe(
+    'Replace 3 matches of "world" with "there" in "Budget plan".',
   );
 });
 
@@ -172,7 +184,7 @@ test("a find only in a header still counts as in the Doc", () => {
     structure,
     parsed([{ type: "replace_text", find: "Draft", replace: "" }]),
   );
-  expect(typeof planned === "string" ? planned : planned.lines[0]).toContain(
+  expect(typeof planned === "string" ? planned : planned.notes[0]?.content).toContain(
     "1 in headers, footers or footnotes",
   );
 });
@@ -204,15 +216,23 @@ test("the batch always holds the edit to the revision it was read at", () => {
   expect(body["writeControl"]).toEqual({ requiredRevisionId: "rev-1" });
 });
 
-test("the confirm lines show the exact text inserted, deleted and replaced", () => {
-  const { lines } = plan(
+test("the confirm notes show the exact text inserted, deleted and replaced, without indexes", () => {
+  const planned = plan(
     parsed([
       { type: "delete_range", startIndex: 7, endIndex: 12 },
       { type: "replace_text", find: "para", replace: "part", matchCase: false },
     ]),
   );
-  expect(lines[0]).toBe("1. Delete 7–12:\n    Hello");
-  expect(lines[1]).toBe('2. Replace every "para" (1 in the body; ignoring case) with:\n    part');
+  const [deleted, replaced] = planned.notes;
+  expect(deleted?.content).toBe("Delete:\n    Hello");
+  expect(deleted?.sentence("Plan")).toBe('Delete "Hello" from "Plan".');
+  expect(replaced?.content).toBe(
+    "Replace every match (1 in the body; ignoring case):\n    para\n  →\n    part",
+  );
+  expect(contentOf(planned)).toStartWith("1. Delete:\n    Hello\n\n2. Replace every match");
+  expect(summaryOf(planned, "Plan")).toBe('Make 2 changes to "Plan".');
+  const single = plan(parsed([{ type: "replace_text", find: "para", replace: "part" }]));
+  expect(summaryOf(single, "Plan")).toBe('Replace 1 match of "para" with "part" in "Plan".');
 });
 
 test("edits that cannot be built say why and build nothing", () => {

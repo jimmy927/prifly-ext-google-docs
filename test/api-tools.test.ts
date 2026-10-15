@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { apiDocsTool, DISCOVERY, resolveApiUrl, searchDiscovery } from "../api-tools";
 import { CANCELLED } from "../common";
 import { DOC_ID } from "./fake-drive";
-import { setup } from "./helpers";
+import { expectPlainCard, setup } from "./helpers";
 
 test("a GET runs at once with the account's token and answers status and body", async () => {
   const fake = setup({ info: { name: "Budget" } });
@@ -20,20 +20,45 @@ test("a GET runs at once with the account's token and answers status and body", 
 });
 
 test("a write shows method, URL and body on the card and is sent only when confirmed", async () => {
-  const fake = setup();
+  const fake = setup({ info: { name: "Budget plan" } });
   const args = {
     method: "post",
     path: `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
     body: { requests: [] },
   };
   expect(await fake.callTool("google_docs_api", args)).toStartWith("200");
-  expect(fake.confirms[0]?.details).toBe(
+  const card = fake.confirms[0];
+  expect(card?.summary).toBe('Change the Google Doc "Budget plan".');
+  expect(card?.content).toBeUndefined();
+  expect(card?.details).toBe(
     `POST https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate\n\n{"requests":[]}`,
   );
+  expectPlainCard(card, [`${DOC_ID}:batchUpdate`, '{"requests":[]}']);
+  expect(card?.summary).not.toContain(DOC_ID);
   expect(fake.writes()[0]?.body).toBe('{"requests":[]}');
   fake.confirmAnswer.value = false;
   expect(await fake.callTool("google_docs_api", { ...args, method: "DELETE" })).toBe(CANCELLED);
+  expect(fake.confirms[1]?.summary).toBe(
+    'Send a DELETE request to Google Docs about "Budget plan".',
+  );
   expect(fake.writes()).toHaveLength(1);
+});
+
+test("a Drive call is described in plain words and a flat body is shown as text", async () => {
+  const fake = setup({ info: { name: "Budget plan" } });
+  const path = `/drive/v3/files/${DOC_ID}`;
+  await fake.callTool("google_docs_api", { method: "PATCH", path, body: { name: "Budget 2027" } });
+  const card = fake.confirms[0];
+  expect(card?.summary).toBe('Send a PATCH request to Drive about "Budget plan".');
+  expect(card?.content).toBe("name: Budget 2027");
+  expectPlainCard(card, [
+    `PATCH https://www.googleapis.com/drive/v3/files/${DOC_ID}`,
+    '{"name":"Budget 2027"}',
+  ]);
+  expect(card?.summary).not.toContain(DOC_ID);
+  await fake.callTool("google_docs_api", { method: "DELETE", path });
+  expect(fake.confirms[1]?.summary).toBe('Send a DELETE request to Drive about "Budget plan".');
+  expect(fake.confirms[1]?.content).toBeUndefined();
 });
 
 test("only the Docs v1 and Drive v3 APIs are reached; anything else is refused without a request", async () => {

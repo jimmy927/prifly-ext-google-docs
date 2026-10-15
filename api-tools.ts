@@ -9,7 +9,7 @@
 import type { ExtensionApi, ExtensionTool } from "@prifly/extension-api";
 import { ask, cut, googleFor, text } from "./common";
 import { signInText } from "./connection";
-import { field, isRecord, str } from "./drive";
+import { DRIVE_API, field, type Google, isRecord, str } from "./drive";
 
 const RESPONSE_CAP = 60_000;
 const DOCS_CAP = 20_000;
@@ -64,6 +64,58 @@ function bodyOf(args: Record<string, unknown>): string | null {
   return typeof body === "string" ? body : JSON.stringify(body);
 }
 
+/** The id of the Doc or Drive file a call is about, from its path. */
+function fileIdOf(url: URL): string | null {
+  const match = /^\/(?:v1\/documents|drive\/v3\/files)\/([^/:]+)/.exec(url.pathname);
+  return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
+}
+
+/** The title of the file a call is about, for its summary; null when there is none or it cannot be read. */
+async function titleOf(google: Google, url: URL, signal: AbortSignal): Promise<string | null> {
+  const id = fileIdOf(url);
+  if (id === null) return null;
+  const lookup = `${DRIVE_API}/files/${encodeURIComponent(id)}?fields=name&supportsAllDrives=true`;
+  try {
+    const answer = await google.fetch(lookup, { signal });
+    if ("needsSignIn" in answer || !answer.ok) return null;
+    return str(field(await answer.json(), "name"));
+  } catch {
+    return null;
+  }
+}
+
+/** One plain sentence for what a non-GET call does, naming the file by its title. */
+function describeCall(call: ApiCall, name: string | null): string {
+  const quoted = name === null ? null : JSON.stringify(name);
+  const docs = call.url.hostname === "docs.googleapis.com";
+  if (docs && call.method === "POST" && call.url.pathname.endsWith(":batchUpdate")) {
+    return `Change ${quoted === null ? "a Google Doc" : `the Google Doc ${quoted}`}.`;
+  }
+  if (docs && call.method === "POST" && call.url.pathname === "/v1/documents") {
+    return "Create a new Google Doc.";
+  }
+  const where = docs ? "Google Docs" : "Drive";
+  return `Send a ${call.method} request to ${where}${quoted === null ? "" : ` about ${quoted}`}.`;
+}
+
+/** The body as `name: value` lines when it is a flat object of plain values; null when it is not readable. */
+function readableBody(body: string | null): string | null {
+  if (body === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+  const entries = Object.entries(parsed);
+  const plain = entries.every(([, value]) =>
+    ["string", "number", "boolean"].includes(typeof value),
+  );
+  if (entries.length === 0 || !plain) return null;
+  return entries.map(([key, value]) => `${key}: ${value}`).join("\n");
+}
+
 async function answerText(response: Response): Promise<string> {
   const body = await response.text();
   const head = `${response.status}${response.statusText === "" ? "" : ` ${response.statusText}`}`;
@@ -95,11 +147,7 @@ export function apiTool(api: ExtensionApi): ExtensionTool {
       const found = googleFor(api);
       if ("problem" in found) return found.problem;
       if (call.method !== "GET") {
-        const refused = await ask(api, {
-          title: "Call the Google Docs API",
-          summary: `${call.method} ${call.url.pathname}`,
-          details: `${call.method} ${call.url.href}${call.body === null ? "" : `\n\n${call.body}`}`,
-        });
+        const refused = await askAboutCall(api, found.google, call, ctx.signal);
         if (refused !== null) return refused;
       }
       const answer = await found.google.fetch(call.url.href, requestInit(call, ctx.signal));
@@ -110,6 +158,23 @@ export function apiTool(api: ExtensionApi): ExtensionTool {
 }
 
 type ApiCall = { method: string; url: URL; body: string | null };
+
+/** The confirm card for a write: plain words first, the request under Details. */
+async function askAboutCall(
+  api: ExtensionApi,
+  google: Google,
+  call: ApiCall,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const name = await titleOf(google, call.url, signal);
+  const content = readableBody(call.body);
+  return await ask(api, {
+    title: "Call the Google Docs API",
+    summary: describeCall(call, name),
+    ...(content === null ? {} : { content }),
+    details: `${call.method} ${call.url.href}${call.body === null ? "" : `\n\n${call.body}`}`,
+  });
+}
 
 function requestInit(call: ApiCall, signal: AbortSignal): RequestInit {
   const init: RequestInit = { method: call.method, signal };
