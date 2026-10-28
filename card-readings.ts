@@ -10,8 +10,25 @@ import { field, isRecord, str } from "./drive";
 type Reading = (bodies: unknown[]) => string;
 type Readings = Record<string, Reading>;
 
-/** At most this many distinct readings are listed; past it the first stands and the rest are counted. */
+/**
+ * At most this many distinct readings are listed; past it the first stands and the rest are counted,
+ * except that every destructive reading is always named (see `destructive`).
+ */
 const MAX_READINGS = 4;
+
+const DESTRUCTIVE = new WeakSet<Reading>();
+
+/** Marks a reading as removing or overwriting something: the card's first line must always name it. */
+const destructive = (reading: Reading): Reading => {
+  DESTRUCTIVE.add(reading);
+  return reading;
+};
+
+/** Whether the table's reading for `kind` is marked destructive. */
+export function isDestructive(readings: Readings, kind: string): boolean {
+  const reading = readings[kind];
+  return reading !== undefined && DESTRUCTIVE.has(reading);
+}
 
 /** The same words however many requests there are. */
 const fixed =
@@ -131,8 +148,8 @@ function renameSheet(bodies: unknown[]): string {
 /** The Docs `Request` kinds. */
 export const DOCS_READINGS: Readings = {
   acceptSuggestion: counted("accept a suggestion", "accept {n} suggestions"),
-  rejectSuggestion: counted("reject a suggestion", "reject {n} suggestions"),
-  deleteSuggestion: counted("delete a suggestion", "delete {n} suggestions"),
+  rejectSuggestion: destructive(counted("reject a suggestion", "reject {n} suggestions")),
+  deleteSuggestion: destructive(counted("delete a suggestion", "delete {n} suggestions")),
   addCommentReply: counted("reply to a comment", "reply to {n} comments"),
   addDocumentTab: tabTitle("add", "tabProperties", "title"),
   createDropdownDefinition: fixed("create a dropdown"),
@@ -141,18 +158,20 @@ export const DOCS_READINGS: Readings = {
   createHeader: fixed("add a header"),
   createNamedRange: counted("name a range", "name {n} ranges"),
   createParagraphBullets: fixed("add bullets"),
-  deleteComment: counted("delete a comment", "delete {n} comments"),
-  deleteCommentReply: counted("delete a comment reply", "delete {n} comment replies"),
-  deleteContentRange: counted("delete text", "delete text in {n} places"),
-  deleteDropdownDefinition: fixed("delete a dropdown"),
-  deleteFooter: fixed("delete a footer"),
-  deleteHeader: fixed("delete a header"),
-  deleteNamedRange: counted("delete a named range", "delete {n} named ranges"),
-  deleteParagraphBullets: fixed("remove bullets"),
-  deletePositionedObject: counted("delete a floating object", "delete {n} floating objects"),
-  deleteTab: counted("delete a tab", "delete {n} tabs"),
-  deleteTableColumn: counted("delete a table column", "delete {n} table columns"),
-  deleteTableRow: counted("delete a table row", "delete {n} table rows"),
+  deleteComment: destructive(counted("delete a comment", "delete {n} comments")),
+  deleteCommentReply: destructive(counted("delete a comment reply", "delete {n} comment replies")),
+  deleteContentRange: destructive(counted("delete text", "delete text in {n} places")),
+  deleteDropdownDefinition: destructive(fixed("delete a dropdown")),
+  deleteFooter: destructive(fixed("delete a footer")),
+  deleteHeader: destructive(fixed("delete a header")),
+  deleteNamedRange: destructive(counted("delete a named range", "delete {n} named ranges")),
+  deleteParagraphBullets: destructive(fixed("remove bullets")),
+  deletePositionedObject: destructive(
+    counted("delete a floating object", "delete {n} floating objects"),
+  ),
+  deleteTab: destructive(counted("delete a tab", "delete {n} tabs")),
+  deleteTableColumn: destructive(counted("delete a table column", "delete {n} table columns")),
+  deleteTableRow: destructive(counted("delete a table row", "delete {n} table rows")),
   insertComment: counted("add a comment", "add {n} comments"),
   insertDate: counted("insert a date", "insert {n} dates"),
   insertDropdown: counted("insert a dropdown", "insert {n} dropdowns"),
@@ -167,9 +186,9 @@ export const DOCS_READINGS: Readings = {
   insertText,
   mergeTableCells: fixed("merge table cells"),
   pinTableHeaderRows: fixed("pin table header rows"),
-  replaceAllText: replaceAll,
-  replaceImage: counted("replace an image", "replace {n} images"),
-  replaceNamedRangeContent: fixed("replace the content of a named range"),
+  replaceAllText: destructive(replaceAll),
+  replaceImage: destructive(counted("replace an image", "replace {n} images")),
+  replaceNamedRangeContent: destructive(fixed("replace the content of a named range")),
   unmergeTableCells: fixed("split merged table cells"),
   updateCommentPost: counted("edit a comment", "edit {n} comments"),
   updateDocumentStyle: fixed("change the page setup"),
@@ -204,43 +223,43 @@ export const SHEETS_READINGS: Readings = {
   autoFill: fixed("auto-fill cells"),
   autoResizeDimensions: fixed("auto-resize rows or columns"),
   cancelDataSourceRefresh: fixed("cancel a data refresh"),
-  clearBasicFilter: fixed("clear the filter"),
+  clearBasicFilter: destructive(fixed("clear the filter")),
   copyPaste: fixed("copy and paste cells"),
   createDeveloperMetadata: fixed("add developer metadata"),
-  cutPaste: fixed("move cells"),
-  deleteBanding: fixed("remove alternating colors"),
-  deleteComment: counted("delete a comment", "delete {n} comments"),
-  deleteCommentReply: counted("delete a comment reply", "delete {n} comment replies"),
-  deleteConditionalFormatRule: fixed("delete a conditional format"),
-  deleteDataSource: fixed("delete a data source"),
-  deleteDeveloperMetadata: fixed("delete developer metadata"),
-  deleteDimension: fixed("delete cells"),
-  deleteDimensionGroup: fixed("ungroup rows or columns"),
-  deleteDuplicates: fixed("remove duplicate rows"),
-  deleteEmbeddedObject: fixed("delete a chart or image"),
-  deleteFilterView: fixed("delete a filter view"),
-  deleteNamedRange: counted("delete a named range", "delete {n} named ranges"),
-  deleteProtectedRange: fixed("remove range protection"),
-  deleteRange: fixed("delete cells"),
-  deleteSheet: counted("delete a tab", "delete {n} tabs"),
-  deleteTable: fixed("delete a table"),
+  cutPaste: destructive(fixed("move cells")),
+  deleteBanding: destructive(fixed("remove alternating colors")),
+  deleteComment: destructive(counted("delete a comment", "delete {n} comments")),
+  deleteCommentReply: destructive(counted("delete a comment reply", "delete {n} comment replies")),
+  deleteConditionalFormatRule: destructive(fixed("delete a conditional format")),
+  deleteDataSource: destructive(fixed("delete a data source")),
+  deleteDeveloperMetadata: destructive(fixed("delete developer metadata")),
+  deleteDimension: destructive(fixed("delete cells")),
+  deleteDimensionGroup: destructive(fixed("ungroup rows or columns")),
+  deleteDuplicates: destructive(fixed("remove duplicate rows")),
+  deleteEmbeddedObject: destructive(fixed("delete a chart or image")),
+  deleteFilterView: destructive(fixed("delete a filter view")),
+  deleteNamedRange: destructive(counted("delete a named range", "delete {n} named ranges")),
+  deleteProtectedRange: destructive(fixed("remove range protection")),
+  deleteRange: destructive(fixed("delete cells")),
+  deleteSheet: destructive(counted("delete a tab", "delete {n} tabs")),
+  deleteTable: destructive(fixed("delete a table")),
   duplicateFilterView: fixed("duplicate a filter view"),
   duplicateSheet: counted("duplicate a tab", "duplicate {n} tabs"),
-  findReplace,
+  findReplace: destructive(findReplace),
   insertComment: counted("add a comment", "add {n} comments"),
   insertDimension: fixed("insert rows or columns"),
   insertRange: fixed("insert cells"),
   mergeCells: fixed("merge cells"),
   moveDimension: fixed("move rows or columns"),
   pasteData: fixed("paste data"),
-  randomizeRange: fixed("shuffle rows"),
+  randomizeRange: destructive(fixed("shuffle rows")),
   refreshDataSource: fixed("refresh a data source"),
   repeatCell: fixed("format cells"),
   setBasicFilter: fixed("set a filter"),
   setDataValidation: fixed("set a dropdown or validation rule"),
   sortRange: fixed("sort rows"),
   textToColumns: fixed("split text into columns"),
-  trimWhitespace: fixed("trim whitespace in cells"),
+  trimWhitespace: destructive(fixed("trim whitespace in cells")),
   unmergeCells: fixed("unmerge cells"),
   updateBanding: fixed("change alternating colors"),
   updateBorders: fixed("change borders"),
@@ -273,7 +292,7 @@ function otherChanges(n: number): string {
   return `${n} other ${n === 1 ? "change" : "changes"}`;
 }
 
-type Phrase = { text: string; changes: number };
+type Phrase = { text: string; changes: number; destructive: boolean };
 
 /** The phrases for `requests`: one per kind, equal ones merged, those of unknown kinds last. */
 function phrasesOf(readings: Readings, requests: unknown[]): Phrase[] {
@@ -288,17 +307,39 @@ function phrasesOf(readings: Readings, requests: unknown[]): Phrase[] {
   for (const [kind, bodies] of groups) {
     const text = readings[kind]?.(bodies) ?? "";
     const known = phrases.find((each) => each.text === text);
-    if (known === undefined) phrases.push({ text, changes: bodies.length });
-    else known.changes += bodies.length;
+    if (known === undefined)
+      phrases.push({ text, changes: bodies.length, destructive: isDestructive(readings, kind) });
+    else {
+      known.changes += bodies.length;
+      known.destructive ||= isDestructive(readings, kind);
+    }
   }
-  if (unknown > 0) phrases.push({ text: otherChanges(unknown), changes: unknown });
+  if (unknown > 0)
+    phrases.push({ text: otherChanges(unknown), changes: unknown, destructive: false });
   return phrases;
+}
+
+/**
+ * The sentence for more than MAX_READINGS phrases: every destructive phrase first (however many),
+ * then other phrases while room is left (one slot of MAX_READINGS stays for "and N more changes"; with
+ * no destructive phrase the first stands alone), then the number of changes left unsaid.
+ */
+function cappedSentence(phrases: Phrase[], total: number): string {
+  const dangerous = phrases.filter((each) => each.destructive);
+  const room = dangerous.length === 0 ? 1 : Math.max(0, MAX_READINGS - 1 - dangerous.length);
+  const named = [...dangerous, ...phrases.filter((each) => !each.destructive).slice(0, room)];
+  const left = total - named.reduce((sum, each) => sum + each.changes, 0);
+  const texts = named.map((each) => each.text);
+  if (left > 0) return `${texts.join(", ")} and ${plural(left, "more change")}`;
+  const last = texts.pop();
+  return texts.length === 0 ? (last ?? "") : `${texts.join(", ")} and ${last}`;
 }
 
 /**
  * One sentence for the requests of a `batchUpdate` body, ending in `target` ("the Google Doc \"Plan\"");
  * null when the body has no requests. Requests of a kind are one phrase, equal phrases are said once,
- * and past four phrases the first is followed by the number of changes left unsaid.
+ * and past four phrases the destructive ones (else the first) are followed by the number of changes
+ * left unsaid.
  */
 export function describeRequests(
   readings: Readings,
@@ -313,7 +354,7 @@ export function describeRequests(
   const sentence =
     phrases.length <= MAX_READINGS
       ? phrases.map((each) => each.text).join(" and ")
-      : `${first.text} and ${plural(requests.length - first.changes, "more change")}`;
+      : cappedSentence(phrases, requests.length);
   const preposition = sentence.startsWith("add") ? "to" : "in";
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)} ${preposition} ${target}.`;
 }

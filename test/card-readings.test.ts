@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { describeCall } from "../api-tools";
-import { DOCS_READINGS, describeRequests, SHEETS_READINGS } from "../card-readings";
+import { DOCS_READINGS, describeRequests, isDestructive, SHEETS_READINGS } from "../card-readings";
 import { DOC_ID } from "./fake-drive";
 import { setup } from "./helpers";
 import { DOCS_REQUEST_KINDS, SHEETS_REQUEST_KINDS } from "./request-kinds";
@@ -123,6 +123,87 @@ test("past four readings the first is named and the rest counted", async () => {
   expect(await summaryOf(DOC, requests.slice(1, 5))).toBe(
     'Accept a suggestion and insert text and add a header and add a footer in the Google Doc "Plan".',
   );
+});
+
+test("a delete last among many kinds is still named on the first line", async () => {
+  const requests = [
+    { insertText: {} },
+    { createHeader: {} },
+    { createFooter: {} },
+    { insertPageBreak: {} },
+    { insertDate: {} },
+    { deleteTab: {} },
+  ];
+  expect(await summaryOf(DOC, requests)).toBe(
+    'Delete a tab, insert text, add a header and 3 more changes in the Google Doc "Plan".',
+  );
+});
+
+test("every destructive kind is named even past the cap", async () => {
+  const requests = [
+    { deleteTab: {} },
+    { deleteTab: {} },
+    { insertText: {} },
+    { deleteContentRange: {} },
+    { deleteContentRange: {} },
+    { deleteContentRange: {} },
+    { createHeader: {} },
+    { createFooter: {} },
+    { insertPageBreak: {} },
+    { insertDate: {} },
+  ];
+  expect(await summaryOf(DOC, requests)).toBe(
+    'Delete 2 tabs, delete text in 3 places, insert text and 4 more changes in the Google Doc "Plan".',
+  );
+  const many = [
+    { deleteTab: {} },
+    { deleteContentRange: {} },
+    { deleteHeader: {} },
+    { deleteFooter: {} },
+    { deleteTableRow: {} },
+    { insertText: {} },
+  ];
+  expect(await summaryOf(DOC, many)).toBe(
+    'Delete a tab, delete text, delete a header, delete a footer, delete a table row and 1 more change in the Google Doc "Plan".',
+  );
+  const onlyDeletes = many.slice(0, 5);
+  expect(await summaryOf(DOC, onlyDeletes)).toBe(
+    'Delete a tab, delete text, delete a header, delete a footer and delete a table row in the Google Doc "Plan".',
+  );
+});
+
+test("sheets deletes survive the cap too", async () => {
+  const requests = [
+    { addSheet: {} },
+    { sortRange: {} },
+    { mergeCells: {} },
+    { repeatCell: {} },
+    { updateCells: {} },
+    { deleteRange: {} },
+  ];
+  expect(await summaryOf(SHEETS, requests)).toBe(
+    'Delete cells, add a tab, sort rows and 3 more changes in the spreadsheet "Plan".',
+  );
+});
+
+test("every kind whose reading starts with delete or remove is flagged destructive", () => {
+  for (const [readings, kinds] of [
+    [DOCS_READINGS, DOCS_REQUEST_KINDS],
+    [SHEETS_READINGS, SHEETS_REQUEST_KINDS],
+  ] as const) {
+    for (const kind of kinds) {
+      const sentence = describeRequests(readings, { requests: [{ [kind]: {} }] }, "T") ?? "";
+      if (/^(Delete|Remove|Clear)/.test(sentence) || kind.startsWith("delete")) {
+        expect([kind, isDestructive(readings, kind)]).toEqual([kind, true]);
+      }
+    }
+  }
+  for (const kind of ["cutPaste", "trimWhitespace", "randomizeRange", "rejectSuggestion"]) {
+    expect(isDestructive(kind === "rejectSuggestion" ? DOCS_READINGS : SHEETS_READINGS, kind)).toBe(
+      true,
+    );
+  }
+  expect(isDestructive(DOCS_READINGS, "insertText")).toBe(false);
 });
 
 test("a kind the tables do not know falls back to a count of other changes", async () => {
