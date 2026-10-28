@@ -1,7 +1,8 @@
 /**
- * The whole Docs, Drive and Sheets APIs for what the curated tools do not cover:
- * `google_docs_api` sends any call to docs.googleapis.com/v1,
- * www.googleapis.com/drive/v3 or sheets.googleapis.com/v4 with the account's auth (anything but a GET
+ * The whole Docs, Drive, Sheets, Slides and Forms APIs for what the curated tools do not cover:
+ * `google_docs_api` sends any call to docs.googleapis.com/v1, www.googleapis.com/drive/v3
+ * (and its media uploads), sheets.googleapis.com/v4, slides.googleapis.com/v1 or
+ * forms.googleapis.com/v1 with the account's auth (anything but a GET
  * is confirmed first), and `google_docs_api_docs` reads Google's own
  * discovery documents, so a changed API is a prompt change.
  */
@@ -11,6 +12,7 @@ import { DOCS_READINGS, describeRequests, SHEETS_READINGS } from "./card-reading
 import { ask, cut, googleFor, text } from "./common";
 import { signInText } from "./connection";
 import { DRIVE_API, field, type Google, isRecord, str } from "./drive";
+import { type Media, mediaText, multipartBody, UPLOAD_PREFIX, uploadMedia } from "./upload";
 
 const RESPONSE_CAP = 60_000;
 const DOCS_CAP = 20_000;
@@ -23,6 +25,9 @@ const ALLOWED = [
   { host: "docs.googleapis.com", prefix: "/v1/" },
   { host: "www.googleapis.com", prefix: "/drive/v3/" },
   { host: "sheets.googleapis.com", prefix: "/v4/" },
+  { host: "slides.googleapis.com", prefix: "/v1/" },
+  { host: "forms.googleapis.com", prefix: "/v1/" },
+  { host: "www.googleapis.com", prefix: "/upload/drive/v3/" },
 ];
 
 function withQuery(url: URL, query: unknown): void {
@@ -42,11 +47,16 @@ export function resolveApiUrl(path: string, query?: unknown): URL | string {
   let url: URL;
   try {
     if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) url = new URL(trimmed);
-    else if (bare.startsWith("v1/")) url = new URL(`https://docs.googleapis.com/${bare}`);
-    else if (bare.startsWith("drive/v3/")) url = new URL(`https://www.googleapis.com/${bare}`);
-    else if (bare.startsWith("v4/")) url = new URL(`https://sheets.googleapis.com/${bare}`);
+    else if (/^v1\/presentations(?=[/:?#]|$)/.test(bare)) {
+      url = new URL(`https://slides.googleapis.com/${bare}`);
+    } else if (/^v1\/forms(?=[/:?#]|$)/.test(bare)) {
+      url = new URL(`https://forms.googleapis.com/${bare}`);
+    } else if (bare.startsWith("v1/")) url = new URL(`https://docs.googleapis.com/${bare}`);
+    else if (bare.startsWith("drive/v3/") || bare.startsWith("upload/drive/v3/")) {
+      url = new URL(`https://www.googleapis.com/${bare}`);
+    } else if (bare.startsWith("v4/")) url = new URL(`https://sheets.googleapis.com/${bare}`);
     else {
-      return `Refused: "${path}" is not a Docs, Drive or Sheets API path. Start it with /v1/ (Docs), /drive/v3/ (Drive) or /v4/ (Sheets), or give the whole https URL.`;
+      return `Refused: "${path}" is not a Docs, Drive, Sheets, Slides or Forms API path. Start it with /v1/ (Docs; /v1/presentations is Slides, /v1/forms is Forms), /drive/v3/ (Drive), /upload/drive/v3/ (Drive upload) or /v4/ (Sheets), or give the whole https URL.`;
     }
   } catch {
     return `Refused: "${path}" is not a URL.`;
@@ -55,7 +65,7 @@ export function resolveApiUrl(path: string, query?: unknown): URL | string {
     (each) => url.hostname === each.host && url.pathname.startsWith(each.prefix),
   );
   if (url.protocol !== "https:" || url.port !== "" || url.username !== "" || !allowed) {
-    return `Refused: google_docs_api only reaches https://docs.googleapis.com/v1/…, https://www.googleapis.com/drive/v3/… and https://sheets.googleapis.com/v4/…, not ${url.origin}${url.pathname}.`;
+    return `Refused: google_docs_api only reaches https://docs.googleapis.com/v1/…, https://www.googleapis.com/drive/v3/… (and /upload/drive/v3/…), https://sheets.googleapis.com/v4/…, https://slides.googleapis.com/v1/… and https://forms.googleapis.com/v1/…, not ${url.origin}${url.pathname}.`;
   }
   withQuery(url, query);
   return url;
@@ -69,9 +79,10 @@ function bodyOf(args: Record<string, unknown>): string | null {
 
 /** The id of the Doc, spreadsheet or Drive file a call is about, from its path. */
 function fileIdOf(url: URL): string | null {
-  const match = /^\/(?:v1\/documents|drive\/v3\/files|v4\/spreadsheets)\/([^/:]+)/.exec(
-    url.pathname,
-  );
+  const match =
+    /^\/(?:v1\/documents|v1\/presentations|v1\/forms|drive\/v3\/files|upload\/drive\/v3\/files|v4\/spreadsheets)\/([^/:]+)/.exec(
+      url.pathname,
+    );
   return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
 }
 
@@ -210,7 +221,7 @@ export function apiTool(api: ExtensionApi): ExtensionTool {
   return {
     name: "google_docs_api",
     description:
-      "Any call to the Google Docs API (https://docs.googleapis.com/v1/…), the Drive API (https://www.googleapis.com/drive/v3/…) or the Google Sheets API v4 (https://sheets.googleapis.com/v4/…, e.g. add a tab with spreadsheets.batchUpdate, write cells with spreadsheets.values.update) with the connected account, for what the other google_docs_* tools do not cover. A GET runs at once; anything else is shown to the reader on a confirm card first. Look the method up with google_docs_api_docs. Answers the status and the response body.",
+      "Any call to the Google Docs API (https://docs.googleapis.com/v1/…), the Drive API (https://www.googleapis.com/drive/v3/…), the Google Sheets API v4 (https://sheets.googleapis.com/v4/…, e.g. add a tab with spreadsheets.batchUpdate, write cells with spreadsheets.values.update), the Google Slides API v1 (https://slides.googleapis.com/v1/presentations/…, e.g. presentations.batchUpdate) or the Google Forms API v1 (https://forms.googleapis.com/v1/forms/…, e.g. forms.batchUpdate) with the connected account, for what the other google_docs_* tools do not cover. It also uploads a local file to Drive: PATCH https://www.googleapis.com/upload/drive/v3/files/{id}?uploadType=media replaces a file's content, POST …/upload/drive/v3/files?uploadType=media|multipart creates one (multipart: `body` is the file's metadata); pass the file as media_path. A GET runs at once; anything else, every upload included, is shown to the reader on a confirm card first. Look the method up with google_docs_api_docs. Answers the status and the response body.",
     inputSchema: {
       type: "object",
       properties: {
@@ -218,15 +229,28 @@ export function apiTool(api: ExtensionApi): ExtensionTool {
         path: {
           type: "string",
           description:
-            "/v1/documents/{id} (Docs), /drive/v3/files/{id} (Drive), /v4/spreadsheets/{id} (Sheets), or the whole https URL.",
+            "/v1/documents/{id} (Docs), /drive/v3/files/{id} (Drive), /v4/spreadsheets/{id} (Sheets), /v1/presentations/{id} (Slides), /v1/forms/{id} (Forms), /upload/drive/v3/files[/{id}]?uploadType=media|multipart (Drive upload), or the whole https URL.",
         },
         query: { type: "object", description: "Query parameters, by name." },
-        body: { type: "object", description: "The JSON request body." },
+        body: {
+          type: "object",
+          description: "The JSON request body (for uploadType=multipart: the file's metadata).",
+        },
+        media_path: {
+          type: "string",
+          description:
+            "Upload only: the absolute path of the local file to send as the content. Refused on any other URL.",
+        },
+        content_type: {
+          type: "string",
+          description:
+            "Upload only: the content's MIME type (default: from the file's extension, else application/octet-stream).",
+        },
       },
       required: ["path"],
     },
     call: async (args, ctx) => {
-      const call = apiCall(args);
+      const call = await apiCall(args);
       if (typeof call === "string") return call;
       const found = googleFor(api);
       if ("problem" in found) return found.problem;
@@ -241,7 +265,7 @@ export function apiTool(api: ExtensionApi): ExtensionTool {
   };
 }
 
-type ApiCall = { method: string; url: URL; body: string | null };
+type ApiCall = { method: string; url: URL; body: string | null; media?: Media };
 
 /** The confirm card for a write: plain words first, the request under Details. */
 async function askAboutCall(
@@ -251,18 +275,28 @@ async function askAboutCall(
   signal: AbortSignal,
 ): Promise<string | null> {
   const name = await titleOf(google, call.url, signal);
-  const content = readableBody(call.body);
+  const body = readableBody(call.body);
+  const content =
+    call.media === undefined ? body : [mediaText(call.media), body].filter(Boolean).join("\n\n");
+  const file = call.media === undefined ? "" : `\n\n${mediaText(call.media)}`;
   return await ask(api, {
     title: "Call the Google Docs API",
     summary: describeCall(call, name),
     ...(content === null ? {} : { content }),
-    details: `${call.method} ${call.url.href}${call.body === null ? "" : `\n\n${call.body}`}`,
+    details: `${call.method} ${call.url.href}${file}${call.body === null ? "" : `\n\n${call.body}`}`,
   });
 }
 
 function requestInit(call: ApiCall, signal: AbortSignal): RequestInit {
   const init: RequestInit = { method: call.method, signal };
-  if (call.body !== null) {
+  if (call.media?.kind === "media") {
+    init.body = call.media.bytes;
+    init.headers = { "Content-Type": call.media.contentType };
+  } else if (call.media !== undefined) {
+    const boundary = `prifly-${crypto.randomUUID()}`;
+    init.body = multipartBody(call.body ?? "{}", call.media, boundary);
+    init.headers = { "Content-Type": `multipart/related; boundary=${boundary}` };
+  } else if (call.body !== null) {
     init.body = call.body;
     init.headers = { "Content-Type": "application/json; charset=UTF-8" };
   }
@@ -270,12 +304,22 @@ function requestInit(call: ApiCall, signal: AbortSignal): RequestInit {
 }
 
 /** The request a `google_docs_api` call names, or why it is refused. */
-function apiCall(args: Record<string, unknown>): ApiCall | string {
+async function apiCall(args: Record<string, unknown>): Promise<ApiCall | string> {
   const method = (text(args, "method").trim() || "GET").toUpperCase();
   if (!METHODS.has(method)) return `Refused: ${method} is not one of ${[...METHODS].join(", ")}.`;
   const url = resolveApiUrl(text(args, "path"), args["query"]);
   if (typeof url === "string") return url;
-  return { method, url, body: method === "GET" ? null : bodyOf(args) };
+  const mediaPath = text(args, "media_path").trim();
+  const upload = url.hostname === "www.googleapis.com" && url.pathname.startsWith(UPLOAD_PREFIX);
+  if (!upload) {
+    if (mediaPath !== "") {
+      return "Refused: media_path only goes with a Drive upload URL (https://www.googleapis.com/upload/drive/v3/files…).";
+    }
+    return { method, url, body: method === "GET" ? null : bodyOf(args) };
+  }
+  const media = await uploadMedia(method, url, mediaPath, text(args, "content_type").trim());
+  if (typeof media === "string") return media;
+  return { method, url, body: media.kind === "multipart" ? bodyOf(args) : null, media };
 }
 
 // --- Discovery ---------------------------------------------------------
@@ -286,6 +330,8 @@ export const DISCOVERY: Record<string, string> = {
   docs: "https://docs.googleapis.com/$discovery/rest?version=v1",
   drive: "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest",
   sheets: "https://sheets.googleapis.com/$discovery/rest?version=v4",
+  slides: "https://slides.googleapis.com/$discovery/rest?version=v1",
+  forms: "https://forms.googleapis.com/$discovery/rest?version=v1",
 };
 
 type Method = {
@@ -414,14 +460,14 @@ export function apiDocsTool(fetchPublic: FetchPublic): ExtensionTool {
   return {
     name: "google_docs_api_docs",
     description:
-      "Look up the Google Docs (v1), Drive (v3) or Sheets (v4) API in Google's own discovery document: the methods matching the query, with HTTP method, path, description and parameters, and the request schemas whose name matches (InsertTextRequest, ParagraphStyle…). An empty query lists every method. For google_docs_api.",
+      "Look up the Google Docs (v1), Drive (v3), Sheets (v4), Slides (v1) or Forms (v1) API in Google's own discovery document: the methods matching the query, with HTTP method, path, description and parameters, and the request schemas whose name matches (InsertTextRequest, ParagraphStyle…). An empty query lists every method. For google_docs_api.",
     inputSchema: {
       type: "object",
       properties: {
         api: {
           type: "string",
-          enum: ["docs", "drive", "sheets"],
-          description: "docs, drive or sheets.",
+          enum: ["docs", "drive", "sheets", "slides", "forms"],
+          description: "docs, drive, sheets, slides or forms.",
         },
         query: { type: "string", description: 'Words to find: "batchUpdate", "comments"…' },
       },
@@ -429,7 +475,8 @@ export function apiDocsTool(fetchPublic: FetchPublic): ExtensionTool {
     },
     call: async (args) => {
       const api = text(args, "api").trim().toLowerCase();
-      if (DISCOVERY[api] === undefined) return 'api is "docs", "drive" or "sheets".';
+      if (DISCOVERY[api] === undefined)
+        return 'api is "docs", "drive", "sheets", "slides" or "forms".';
       try {
         return searchDiscovery(await load(api), text(args, "query"));
       } catch (error) {

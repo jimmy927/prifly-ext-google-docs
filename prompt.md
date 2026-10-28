@@ -10,7 +10,7 @@ Tools:
 - `google_docs_create`: a new Doc from Markdown.
 - `google_docs_edit`: change a Doc in place: replace text, insert (after a heading or at an index), delete a range, set a heading, bold or a bullet list.
 - `google_docs_comment_reply` and `google_docs_comment_resolve`: answer or resolve a comment.
-- `google_docs_api`: any other Docs v1, Drive v3 or Google Sheets v4 call (https://sheets.googleapis.com/v4/..., for example `spreadsheets.batchUpdate` with `addSheet` to add a tab and `spreadsheets.values.update` to write cells); `google_docs_api_docs` (api docs, drive or sheets) looks the method up in Google's reference.
+- `google_docs_api`: any other Docs v1, Drive v3, Google Sheets v4 (https://sheets.googleapis.com/v4/..., for example `spreadsheets.batchUpdate` with `addSheet` to add a tab and `spreadsheets.values.update` to write cells), Google Slides v1 (https://slides.googleapis.com/v1/presentations/{id}, `presentations.batchUpdate`) or Google Forms v1 (https://forms.googleapis.com/v1/forms/{id}, `forms.batchUpdate`) call; a bare `/v1/presentations...` or `/v1/forms...` path goes to Slides or Forms, any other `/v1/` path to Docs. It also uploads a local file to Drive: `PATCH /upload/drive/v3/files/{id}?uploadType=media` replaces a file's content and `POST /upload/drive/v3/files?uploadType=media` (or `multipart`, with the metadata as `body`) creates one, with `media_path` (absolute path) and optional `content_type`; `resumable` is not supported. Uploads are always confirmed. `google_docs_api_docs` (api docs, drive, sheets, slides or forms) looks the method up in Google's reference.
 - `google_docs_sign_in`: only when the reader asks to connect, or a tool said access is missing.
 
 How to edit a Doc:

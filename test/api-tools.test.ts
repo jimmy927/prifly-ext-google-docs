@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { apiDocsTool, DISCOVERY, resolveApiUrl, searchDiscovery } from "../api-tools";
 import { CANCELLED } from "../common";
 import { DOC_ID } from "./fake-drive";
@@ -151,7 +154,7 @@ test("the docs tool finds methods and schemas in the discovery document, fetched
   expect(await tool.call({ api: "docs", query: "" }, ctx)).toContain("docs.documents.get  GET");
   expect(fetched).toEqual([DISCOVERY["docs"] ?? ""]);
   expect(await tool.call({ api: "gmail", query: "" }, ctx)).toBe(
-    'api is "docs", "drive" or "sheets".',
+    'api is "docs", "drive", "sheets", "slides" or "forms".',
   );
 });
 
@@ -313,4 +316,137 @@ test("a Drive discovery path keeps its service path", () => {
   };
   expect(searchDiscovery(drive, "")).toBe("drive.files.get  GET /drive/v3/files/{fileId}");
   expect(searchDiscovery(drive, "zzz")).toBe('Nothing in the API matches "zzz".');
+});
+
+const SLIDES = "https://slides.googleapis.com/v1/presentations/deck1";
+const FORMS = "https://forms.googleapis.com/v1/forms/form1";
+
+test("Slides and Forms GETs run at once, their batchUpdates wait for Confirm", async () => {
+  const fake = setup({ info: { name: "Pitch" } });
+  expect(await fake.callTool("google_docs_api", { path: SLIDES })).toStartWith("200");
+  expect(await fake.callTool("google_docs_api", { path: FORMS })).toStartWith("200");
+  expect(fake.confirms).toEqual([]);
+  for (const url of [`${SLIDES}:batchUpdate`, `${FORMS}:batchUpdate`]) {
+    fake.confirmAnswer.value = false;
+    const args = { method: "POST", path: url, body: { requests: [] } };
+    expect(await fake.callTool("google_docs_api", args)).toBe(CANCELLED);
+    expect(fake.writes().some((each) => each.url.href === url)).toBe(false);
+    fake.confirmAnswer.value = true;
+    expect(await fake.callTool("google_docs_api", args)).toStartWith("200");
+  }
+  expect(fake.confirms).toHaveLength(4);
+  expect(fake.writes().map((each) => each.url.href)).toEqual([
+    `${SLIDES}:batchUpdate`,
+    `${FORMS}:batchUpdate`,
+  ]);
+  expect(fake.confirms[0]?.details).toContain(`POST ${SLIDES}:batchUpdate`);
+});
+
+test("bare v1/ paths go to Slides or Forms for presentations and forms, otherwise Docs", () => {
+  expect(String(resolveApiUrl("v1/presentations/x"))).toBe(
+    "https://slides.googleapis.com/v1/presentations/x",
+  );
+  expect(String(resolveApiUrl("/v1/presentations/x:batchUpdate"))).toBe(
+    "https://slides.googleapis.com/v1/presentations/x:batchUpdate",
+  );
+  expect(String(resolveApiUrl("v1/forms/x"))).toBe("https://forms.googleapis.com/v1/forms/x");
+  expect(String(resolveApiUrl("v1/documents/x"))).toBe(
+    "https://docs.googleapis.com/v1/documents/x",
+  );
+  expect(resolveApiUrl("https://slides.googleapis.com/v2/presentations/x")).toBeString();
+  expect(resolveApiUrl("https://forms.googleapis.com/v2/forms/x")).toBeString();
+  expect(resolveApiUrl("https://gmail.googleapis.com/v1/users/me")).toBeString();
+});
+
+test("the card names a presentation, a form or an uploaded file by its title", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "up-"));
+  const file = join(dir, "a.txt");
+  await writeFile(file, "hello");
+  const fake = setup({ info: { name: "Pitch" } });
+  const sends = [
+    { method: "POST", path: `${SLIDES}:batchUpdate`, body: {} },
+    { method: "POST", path: `${FORMS}:batchUpdate`, body: {} },
+    {
+      method: "PATCH",
+      path: `https://www.googleapis.com/upload/drive/v3/files/${DOC_ID}?uploadType=media`,
+      media_path: file,
+    },
+  ];
+  for (const each of sends) await fake.callTool("google_docs_api", each);
+  expect(fake.confirms).toHaveLength(3);
+  for (const card of fake.confirms) expect(card.summary).toContain('"Pitch"');
+  await rm(dir, { recursive: true });
+});
+
+test("a media upload sends the file's bytes with its content type after a card showing the file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "up-"));
+  const file = join(dir, "notes.txt");
+  await writeFile(file, "hello bytes");
+  const fake = setup({ info: { name: "Notes" } });
+  const path = `/upload/drive/v3/files/${DOC_ID}`;
+  const args = { method: "PATCH", path, query: { uploadType: "media" }, media_path: file };
+  fake.confirmAnswer.value = false;
+  expect(await fake.callTool("google_docs_api", args)).toBe(CANCELLED);
+  expect(fake.writes()).toEqual([]);
+  fake.confirmAnswer.value = true;
+  const answer = await fake.callTool("google_docs_api", { ...args, content_type: "text/plain" });
+  expect(answer).toStartWith("200");
+  const card = fake.confirms[1];
+  expect(card?.content).toContain(`File: ${file}`);
+  expect(card?.content).toContain("Size: 11 bytes");
+  expect(card?.content).toContain("Content type: text/plain");
+  expect(card?.details).toContain(file);
+  const sent = fake.writes()[0];
+  expect(sent?.url.href).toBe(
+    `https://www.googleapis.com/upload/drive/v3/files/${DOC_ID}?uploadType=media`,
+  );
+  expect(sent?.body).toBe("hello bytes");
+  expect(sent?.contentType).toBe("text/plain");
+  await rm(dir, { recursive: true });
+});
+
+test("a multipart upload sends the metadata and the file as multipart/related", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "up-"));
+  const file = join(dir, "notes.txt");
+  await writeFile(file, "file text");
+  const fake = setup();
+  const answer = await fake.callTool("google_docs_api", {
+    method: "POST",
+    path: "upload/drive/v3/files?uploadType=multipart",
+    body: { name: "Notes" },
+    media_path: file,
+    content_type: "text/plain",
+  });
+  expect(answer).toStartWith("200");
+  const sent = fake.writes()[0];
+  expect(sent?.contentType).toStartWith("multipart/related; boundary=");
+  expect(sent?.body).toContain('{"name":"Notes"}');
+  expect(sent?.body).toContain("Content-Type: text/plain\r\n\r\nfile text\r\n--");
+  await rm(dir, { recursive: true });
+});
+
+test("uploads refuse resumable, a relative or missing file, and media_path on other URLs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "up-"));
+  const file = join(dir, "a.txt");
+  await writeFile(file, "x");
+  const fake = setup();
+  const up = "/upload/drive/v3/files";
+  const calls: Record<string, unknown>[] = [
+    { method: "POST", path: `${up}?uploadType=resumable`, media_path: file },
+    { method: "POST", path: up, media_path: file },
+    { method: "POST", path: `${up}?uploadType=media`, media_path: "a.txt" },
+    { method: "POST", path: `${up}?uploadType=media` },
+    { method: "POST", path: `${up}?uploadType=media`, media_path: join(dir, "missing") },
+    { method: "PATCH", path: `${up}?uploadType=media`, media_path: file },
+    { method: "POST", path: `${up}?uploadType=media`, media_path: dir },
+    { method: "POST", path: "/drive/v3/files", media_path: file },
+    { method: "POST", path: `${SLIDES}:batchUpdate`, media_path: file },
+  ];
+  for (const each of calls) {
+    expect(await fake.callTool("google_docs_api", each)).toMatch(/^(Refused|Could not read)/);
+  }
+  expect(await fake.callTool("google_docs_api", calls[0] ?? {})).toContain("resumable");
+  expect(fake.confirms).toEqual([]);
+  expect(fake.sent).toEqual([]);
+  await rm(dir, { recursive: true });
 });
