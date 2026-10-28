@@ -150,7 +150,130 @@ test("the docs tool finds methods and schemas in the discovery document, fetched
   expect(schema).toContain("- location: Location");
   expect(await tool.call({ api: "docs", query: "" }, ctx)).toContain("docs.documents.get  GET");
   expect(fetched).toEqual([DISCOVERY["docs"] ?? ""]);
-  expect(await tool.call({ api: "sheets", query: "" }, ctx)).toBe('api is "docs" or "drive".');
+  expect(await tool.call({ api: "gmail", query: "" }, ctx)).toBe(
+    'api is "docs", "drive" or "sheets".',
+  );
+});
+
+const SHEET_ID = "sheet1";
+const SHEETS = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}`;
+
+test("Sheets v4 is allowed, a bare v4/ path resolves to it, other hosts stay refused", async () => {
+  expect(String(resolveApiUrl("v4/spreadsheets/x"))).toBe(
+    "https://sheets.googleapis.com/v4/spreadsheets/x",
+  );
+  expect(resolveApiUrl(`${SHEETS}/values/A1`)).toBeInstanceOf(URL);
+  const fake = setup();
+  for (const path of [
+    "https://sheets.googleapis.com/v3/spreadsheets/x",
+    "https://sheets.example.com/v4/spreadsheets/x",
+    "http://sheets.googleapis.com/v4/spreadsheets/x",
+    "https://script.googleapis.com/v4/spreadsheets/x",
+  ]) {
+    expect(await fake.callTool("google_docs_api", { path })).toStartWith("Refused");
+  }
+  expect(fake.sent).toEqual([]);
+});
+
+test("a Sheets GET runs at once without a card", async () => {
+  const fake = setup({ info: { sheets: [] } });
+  const answer = await fake.callTool("google_docs_api", {
+    path: `/v4/spreadsheets/${SHEET_ID}`,
+    query: { fields: "sheets.properties" },
+  });
+  expect(answer).toStartWith("200");
+  expect(fake.confirms).toEqual([]);
+  expect(fake.sent[0]?.url.href).toBe(`${SHEETS}?fields=sheets.properties`);
+});
+
+test("adding a tab and writing cells are confirmed in plain words, then sent", async () => {
+  const fake = setup({ info: { name: "Rutiner" } });
+  const add = {
+    method: "POST",
+    path: `${SHEETS}:batchUpdate`,
+    body: { requests: [{ addSheet: { properties: { title: "rutiner 2026" } } }] },
+  };
+  expect(await fake.callTool("google_docs_api", add)).toStartWith("200");
+  const card = fake.confirms[0];
+  expect(card?.summary).toBe('Add a tab "rutiner 2026" to the spreadsheet "Rutiner".');
+  expectPlainCard(card, [`POST ${SHEETS}:batchUpdate`, '"addSheet"']);
+  expect(fake.writes()[0]?.url.href).toBe(`${SHEETS}:batchUpdate`);
+
+  const rows = Array.from({ length: 8 }, () => ["a", "b", "c", "d", "e"]);
+  const put = await fake.callTool("google_docs_api", {
+    method: "PUT",
+    path: `${SHEETS}/values/${encodeURIComponent("'rutiner 2026'!A1:E8")}`,
+    query: { valueInputOption: "USER_ENTERED" },
+    body: { values: rows },
+  });
+  expect(put).toStartWith("200");
+  expect(fake.confirms[1]?.summary).toBe(
+    `Write 8 rows into 'rutiner 2026'!A1:E8 in the spreadsheet "Rutiner".`,
+  );
+  expect(fake.confirms[1]?.details).toContain("valueInputOption=USER_ENTERED");
+  expect(fake.writes()).toHaveLength(2);
+
+  await fake.callTool("google_docs_api", {
+    method: "POST",
+    path: `${SHEETS}/values/Sheet1!A1:append`,
+    body: { values: [["x"]] },
+  });
+  expect(fake.confirms[2]?.summary).toBe(
+    'Append 1 row after Sheet1!A1 in the spreadsheet "Rutiner".',
+  );
+  await fake.callTool("google_docs_api", {
+    method: "POST",
+    path: `${SHEETS}:batchUpdate`,
+    body: { requests: [{ updateCells: {} }, { appendCells: {} }] },
+  });
+  expect(fake.confirms[3]?.summary).toBe('Write cells in the spreadsheet "Rutiner".');
+});
+
+test("the docs tool finds Sheets methods in the Sheets discovery document", async () => {
+  const sheets = {
+    servicePath: "",
+    resources: {
+      spreadsheets: {
+        methods: {
+          batchUpdate: {
+            id: "sheets.spreadsheets.batchUpdate",
+            httpMethod: "POST",
+            path: "v4/spreadsheets/{spreadsheetId}:batchUpdate",
+          },
+        },
+        resources: {
+          values: {
+            methods: {
+              update: {
+                id: "sheets.spreadsheets.values.update",
+                httpMethod: "PUT",
+                path: "v4/spreadsheets/{spreadsheetId}/values/{range}",
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const fetched: string[] = [];
+  const tool = apiDocsTool(async (url) => {
+    fetched.push(url);
+    return Response.json(sheets);
+  });
+  const ctx = {
+    session: "s",
+    pick: async () => null,
+    signal: new AbortController().signal,
+    scratchpad: "/",
+  };
+  const found = await tool.call({ api: "sheets", query: "values update" }, ctx);
+  expect(found).toContain(
+    "sheets.spreadsheets.values.update  PUT /v4/spreadsheets/{spreadsheetId}/values/{range}",
+  );
+  expect(await tool.call({ api: "sheets", query: "batchUpdate" }, ctx)).toContain(
+    "sheets.spreadsheets.batchUpdate  POST /v4/spreadsheets/{spreadsheetId}:batchUpdate",
+  );
+  expect(fetched).toEqual([DISCOVERY["sheets"] ?? ""]);
 });
 
 test("a Drive discovery path keeps its service path", () => {

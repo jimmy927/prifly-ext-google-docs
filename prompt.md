@@ -10,7 +10,7 @@ Tools:
 - `google_docs_create`: a new Doc from Markdown.
 - `google_docs_edit`: change a Doc in place: replace text, insert (after a heading or at an index), delete a range, set a heading, bold or a bullet list.
 - `google_docs_comment_reply` and `google_docs_comment_resolve`: answer or resolve a comment.
-- `google_docs_api`: any other Docs v1 or Drive v3 call; `google_docs_api_docs` looks the method up in Google's reference.
+- `google_docs_api`: any other Docs v1, Drive v3 or Google Sheets v4 call (https://sheets.googleapis.com/v4/..., for example `spreadsheets.batchUpdate` with `addSheet` to add a tab and `spreadsheets.values.update` to write cells); `google_docs_api_docs` (api docs, drive or sheets) looks the method up in Google's reference.
 - `google_docs_sign_in`: only when the reader asks to connect, or a tool said access is missing.
 
 How to edit a Doc:

@@ -22,7 +22,7 @@ Tools:
   If the Doc changed since the read, nothing is written: the session reads it
   again and rebuilds the edit. It never makes a copy.
 - `google_docs_comment_reply` and `google_docs_comment_resolve`.
-- `google_docs_api`: any Docs v1 or Drive v3 call with your account (other
+- `google_docs_api`: any Docs v1, Drive v3 or Sheets v4 call (add a tab, write cells) with your account (other
   hosts are refused), and `google_docs_api_docs`, which looks the method up in
   Google's discovery documents.
 - `google_docs_sign_in`: asks you in the browser for Docs and Drive access.
