@@ -227,6 +227,32 @@ test("adding a tab and writing cells are confirmed in plain words, then sent", a
     body: { requests: [{ updateCells: {} }, { appendCells: {} }] },
   });
   expect(fake.confirms[3]?.summary).toBe('Write cells in the spreadsheet "Rutiner".');
+  await fake.callTool("google_docs_api", {
+    method: "POST",
+    path: `${SHEETS}/values/Sheet1!A1:E8:clear`,
+    body: {},
+  });
+  expect(fake.confirms[4]?.summary).toBe('Clear Sheet1!A1:E8 in the spreadsheet "Rutiner".');
+  await fake.callTool("google_docs_api", {
+    method: "POST",
+    path: `${SHEETS}/values/${encodeURIComponent("Sheet1!A1:append")}`,
+    body: { values: [["x"]] },
+  });
+  expect(fake.confirms[5]?.summary).toBe(
+    'Append 1 row after Sheet1!A1 in the spreadsheet "Rutiner".',
+  );
+  await fake.callTool("google_docs_api", {
+    method: "POST",
+    path: `${SHEETS}/values/Sheet1!A1:E8:batchWhatever`,
+    body: {},
+  });
+  expect(fake.confirms[6]?.summary).toBe('Send a POST request to Google Sheets about "Rutiner".');
+  await fake.callTool("google_docs_api", {
+    method: "POST",
+    path: `${SHEETS}:batchUpdate`,
+    body: { requests: [{ deleteSheet: { sheetId: 1 } }] },
+  });
+  expect(fake.confirms[7]?.summary).toBe('Delete a tab in the spreadsheet "Rutiner".');
 });
 
 test("the docs tool finds Sheets methods in the Sheets discovery document", async () => {

@@ -135,6 +135,8 @@ function describeSheetRequest(request: unknown): string | null {
   const title = str(field(field(field(request, "addSheet"), "properties"), "title"));
   if (title !== null) return `add a tab ${JSON.stringify(title)}`;
   if ("updateCells" in request || "appendCells" in request) return "write cells";
+  if ("deleteSheet" in request) return "delete a tab";
+  if ("deleteDimension" in request || "deleteRange" in request) return "delete cells";
   return null;
 }
 
@@ -149,6 +151,34 @@ function describeSheetRequests(body: Record<string, unknown> | null, sheet: stri
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)} ${preposition} ${sheet}.`;
 }
 
+/**
+ * The reading of a call on `values/{range}[:verb]`; null for a verb or method with no reading.
+ * A verb is a word of four letters or more after the last colon (a range's own colon is followed
+ * by a cell or column, at most three letters), checked after decoding the range.
+ */
+function describeRangeCall(
+  method: string,
+  raw: string,
+  body: Record<string, unknown> | null,
+  sheet: string,
+): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  const verb = /:([a-z][A-Za-z]{3,})$/.exec(decoded)?.[1];
+  const name = verb === undefined ? decoded : decoded.slice(0, -(verb.length + 1));
+  if (verb === "clear") return `Clear ${name} in ${sheet}.`;
+  if (verb !== undefined && verb !== "append") return null;
+  if (body === null || (verb === undefined && method !== "PUT")) return null;
+  const rows = plural(rowsIn(field(body, "values")), "row");
+  return verb === "append"
+    ? `Append ${rows} after ${name} in ${sheet}.`
+    : `Write ${rows} into ${name} in ${sheet}.`;
+}
+
 /** One plain sentence for a write to a spreadsheet, or null when the call has no reading of its own. */
 function describeSheetsCall(call: ApiCall, quoted: string | null): string | null {
   const sheet = quoted === null ? "a spreadsheet" : `the spreadsheet ${quoted}`;
@@ -158,14 +188,7 @@ function describeSheetsCall(call: ApiCall, quoted: string | null): string | null
     return describeSheetRequests(body, sheet);
   }
   const range = /\/values\/([^/]+)$/.exec(path);
-  if (range?.[1] !== undefined && body !== null) {
-    const append = range[1].endsWith(":append");
-    const name = decodeURIComponent(range[1]).replace(/:append$/, "");
-    const rows = plural(rowsIn(field(body, "values")), "row");
-    return append
-      ? `Append ${rows} after ${name} in ${sheet}.`
-      : `Write ${rows} into ${name} in ${sheet}.`;
-  }
+  if (range?.[1] !== undefined) return describeRangeCall(call.method, range[1], body, sheet);
   if (path.endsWith("/values:batchUpdate") && body !== null) {
     const data = field(body, "data");
     if (!Array.isArray(data)) return null;
