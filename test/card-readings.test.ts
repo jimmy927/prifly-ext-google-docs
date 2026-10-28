@@ -63,17 +63,32 @@ test("request fields make the reading concrete", async () => {
   expect(await summaryOf(DOC, [{ insertTable: { rows: 3, columns: 4 } }])).toBe(
     'Insert a 3×4 table in the Google Doc "Plan".',
   );
-  expect(await summaryOf(DOC, [{ updateTextStyle: { fields: "bold" } }])).toBe(
-    'Make text bold in the Google Doc "Plan".',
+  const style = (textStyle: object, fields: string) =>
+    summaryOf(DOC, [{ updateTextStyle: { textStyle, fields } }]);
+  expect(await style({ bold: true }, "bold")).toBe('Make text bold in the Google Doc "Plan".');
+  expect(await style({ bold: false }, "bold")).toBe('Remove bold in the Google Doc "Plan".');
+  expect(await style({}, "bold")).toBe('Remove bold in the Google Doc "Plan".');
+  expect(await style({ link: { url: "https://x.test" } }, "link")).toBe(
+    'Add a link to the Google Doc "Plan".',
   );
-  expect(await summaryOf(DOC, [{ updateTextStyle: { fields: "italic,foregroundColor" } }])).toBe(
+  expect(await style({}, "link")).toBe('Remove a link in the Google Doc "Plan".');
+  expect(await style({ italic: true, foregroundColor: {} }, "italic,foregroundColor")).toBe(
     'Make text italic and change text color in the Google Doc "Plan".',
   );
+  const props = { sheetId: 7, title: "2027" };
+  expect(
+    await summaryOf(SHEETS, [{ updateSheetProperties: { properties: props, fields: "title" } }]),
+  ).toBe('Rename a tab to "2027" in the spreadsheet "Plan".');
   expect(
     await summaryOf(SHEETS, [
-      { updateSheetProperties: { properties: { sheetId: 7, title: "2027" }, fields: "title" } },
+      {
+        updateSheetProperties: {
+          properties: { ...props, gridProperties: { frozenRowCount: 1 } },
+          fields: "gridProperties.frozenRowCount",
+        },
+      },
     ]),
-  ).toBe('Rename tab 7 to "2027" in the spreadsheet "Plan".');
+  ).toBe('Change a tab\'s properties in the spreadsheet "Plan".');
   expect(await summaryOf(SHEETS, [{ findReplace: { find: "a", replacement: "b" } }])).toBe(
     'Replace "a" with "b" everywhere in the spreadsheet "Plan".',
   );

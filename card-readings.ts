@@ -45,18 +45,30 @@ function firstField(bodies: unknown[], ...path: string[]): unknown {
 
 /** What a field of an `updateTextStyle` mask is read as; a field not listed reads as a style change. */
 const STYLE_FIELDS: Record<string, string> = {
-  bold: "make text bold",
-  italic: "make text italic",
-  underline: "underline text",
-  strikethrough: "strike text through",
   foregroundColor: "change text color",
   backgroundColor: "highlight text",
   fontSize: "change text size",
   weightedFontFamily: "change the font",
-  link: "add a link",
   baselineOffset: "raise or lower text",
-  smallCaps: "set text in small caps",
 };
+
+/** Fields that switch on when `textStyle` holds a value and off when it does not: [on, off]. */
+const SWITCH_FIELDS: Record<string, [string, string]> = {
+  bold: ["make text bold", "remove bold"],
+  italic: ["make text italic", "remove italics"],
+  underline: ["underline text", "remove underline"],
+  strikethrough: ["strike text through", "remove strikethrough"],
+  smallCaps: ["set text in small caps", "remove small caps"],
+  link: ["add a link", "remove a link"],
+};
+
+function styleWords(body: unknown, name: string): string {
+  const switches = SWITCH_FIELDS[name];
+  if (switches === undefined) return STYLE_FIELDS[name] ?? "change text style";
+  const value = field(field(body, "textStyle"), name);
+  const on = name === "link" ? isRecord(value) : value === true;
+  return on ? switches[0] : switches[1];
+}
 
 function textStyle(bodies: unknown[]): string {
   const words = new Set<string>();
@@ -64,7 +76,7 @@ function textStyle(bodies: unknown[]): string {
     const mask = str(field(body, "fields")) ?? "";
     for (const each of mask.split(",")) {
       const name = each.trim().split(".")[0] ?? "";
-      if (name !== "") words.add(STYLE_FIELDS[name] ?? "change text style");
+      if (name !== "") words.add(styleWords(body, name));
     }
   }
   if (words.size > 1) words.delete("change text style");
@@ -111,11 +123,9 @@ function tabTitle(verb: string, ...path: string[]): Reading {
 function renameSheet(bodies: unknown[]): string {
   const title = quoted(firstField(bodies, "properties", "title"));
   if (bodies.length > 1) return `change the properties of ${bodies.length} tabs`;
-  if (title === null) return "change a tab's properties";
-  const id = firstField(bodies, "properties", "sheetId");
-  return id === undefined || id === null
-    ? `rename a tab to ${title}`
-    : `rename tab ${String(id)} to ${title}`;
+  const mask = (str(firstField(bodies, "fields")) ?? "").split(",").map((each) => each.trim());
+  const renames = mask.includes("title") || mask.includes("*");
+  return title === null || !renames ? "change a tab's properties" : `rename a tab to ${title}`;
 }
 
 /** The Docs `Request` kinds. */
