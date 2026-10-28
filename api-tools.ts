@@ -7,6 +7,7 @@
  */
 
 import type { ExtensionApi, ExtensionTool } from "@prifly/extension-api";
+import { DOCS_READINGS, describeRequests, SHEETS_READINGS } from "./card-readings";
 import { ask, cut, googleFor, text } from "./common";
 import { signInText } from "./connection";
 import { DRIVE_API, field, type Google, isRecord, str } from "./drive";
@@ -88,12 +89,21 @@ async function titleOf(google: Google, url: URL, signal: AbortSignal): Promise<s
   }
 }
 
+/** What the generic reading calls each API by its host; any other host is Drive. */
+const HOST_NAMES: Record<string, string> = {
+  "docs.googleapis.com": "Google Docs",
+  "sheets.googleapis.com": "Google Sheets",
+  "slides.googleapis.com": "Google Slides",
+  "forms.googleapis.com": "Google Forms",
+};
+
 /** One plain sentence for what a non-GET call does, naming the file by its title. */
-function describeCall(call: ApiCall, name: string | null): string {
+export function describeCall(call: ApiCall, name: string | null): string {
   const quoted = name === null ? null : JSON.stringify(name);
   const docs = call.url.hostname === "docs.googleapis.com";
   if (docs && call.method === "POST" && call.url.pathname.endsWith(":batchUpdate")) {
-    return `Change ${quoted === null ? "a Google Doc" : `the Google Doc ${quoted}`}.`;
+    const doc = quoted === null ? "a Google Doc" : `the Google Doc ${quoted}`;
+    return describeRequests(DOCS_READINGS, bodyRecord(call), doc) ?? `Change ${doc}.`;
   }
   if (docs && call.method === "POST" && call.url.pathname === "/v1/documents") {
     return "Create a new Google Doc.";
@@ -102,11 +112,7 @@ function describeCall(call: ApiCall, name: string | null): string {
     const sheet = describeSheetsCall(call, quoted);
     if (sheet !== null) return sheet;
   }
-  const where = docs
-    ? "Google Docs"
-    : call.url.hostname === "sheets.googleapis.com"
-      ? "Google Sheets"
-      : "Drive";
+  const where = HOST_NAMES[call.url.hostname] ?? "Drive";
   return `Send a ${call.method} request to ${where}${quoted === null ? "" : ` about ${quoted}`}.`;
 }
 
@@ -127,28 +133,6 @@ function rowsIn(values: unknown): number {
 
 function plural(n: number, one: string): string {
   return `${n} ${one}${n === 1 ? "" : "s"}`;
-}
-
-/** What one `spreadsheets.batchUpdate` request does, in words; null for a kind with no reading. */
-function describeSheetRequest(request: unknown): string | null {
-  if (!isRecord(request)) return null;
-  const title = str(field(field(field(request, "addSheet"), "properties"), "title"));
-  if (title !== null) return `add a tab ${JSON.stringify(title)}`;
-  if ("updateCells" in request || "appendCells" in request) return "write cells";
-  if ("deleteSheet" in request) return "delete a tab";
-  if ("deleteDimension" in request || "deleteRange" in request) return "delete cells";
-  return null;
-}
-
-/** The reading of a `spreadsheets.batchUpdate` body from its requests; null when it has none. */
-function describeSheetRequests(body: Record<string, unknown> | null, sheet: string): string | null {
-  const requests = body === null ? null : field(body, "requests");
-  if (!Array.isArray(requests) || requests.length === 0) return null;
-  const parts = requests.map(describeSheetRequest);
-  if (parts.some((each) => each === null)) return `Change ${sheet}.`;
-  const sentence = [...new Set(parts)].join(" and ");
-  const preposition = sentence.startsWith("add") ? "to" : "in";
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)} ${preposition} ${sheet}.`;
 }
 
 /**
@@ -185,7 +169,7 @@ function describeSheetsCall(call: ApiCall, quoted: string | null): string | null
   const path = call.url.pathname;
   const body = bodyRecord(call);
   if (path.endsWith(":batchUpdate") && !path.includes("/values")) {
-    return describeSheetRequests(body, sheet);
+    return describeRequests(SHEETS_READINGS, body, sheet);
   }
   const range = /\/values\/([^/]+)$/.exec(path);
   if (range?.[1] !== undefined) return describeRangeCall(call.method, range[1], body, sheet);
