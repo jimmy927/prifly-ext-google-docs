@@ -152,11 +152,7 @@ test("indexes count UTF-16 units, so a character outside the BMP is deleted whol
   expect(doc.blocks).toEqual([
     {
       style: "normal",
-      spans: [
-        { text: "✅", mark: "added" },
-        { text: "🚧", mark: "removed" },
-        { text: " Gym" },
-      ],
+      spans: [{ text: "✅", mark: "added" }, { text: "🚧", mark: "removed" }, { text: " Gym" }],
     },
   ]);
 });
