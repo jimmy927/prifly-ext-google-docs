@@ -7,6 +7,7 @@
 import type { ConfirmSpec, ExtensionApi } from "@prifly/extension-api";
 import { connectionState, signInText, stateText } from "./connection";
 import { type Google, GoogleHttpError, parseDocId, SignInError } from "./drive";
+import type { ConfirmDoc } from "./redline";
 import { StructureError } from "./structure";
 
 /** The `doc` argument every tool on one Doc takes. */
@@ -64,8 +65,13 @@ export async function withGoogle(
 /**
  * Asks the reader on a confirm card. Null when they confirmed; otherwise the
  * tool's answer ("Not done: you cancelled"), and no request may follow.
+ * `doc` is a redline a prifly with "confirm-doc" draws in place of `content`;
+ * an older one copies only the fields it knows, so it shows `content`.
  */
-export async function ask(api: ExtensionApi, spec: ConfirmSpec): Promise<string | null> {
+export async function ask(
+  api: ExtensionApi,
+  spec: ConfirmSpec & { doc?: ConfirmDoc },
+): Promise<string | null> {
   if (api.confirm === undefined) return NO_CONFIRM;
   return (await api.confirm(spec)) ? null : CANCELLED;
 }

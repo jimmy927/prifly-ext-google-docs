@@ -18,6 +18,7 @@ import {
   replyUrl,
 } from "./drive";
 import { batchBody, contentOf, type Operation, parseOperations, planEdit, summaryOf } from "./edit";
+import { redlineOf } from "./redline";
 import { batchUpdate, batchUpdateUrl, readStructure } from "./structure";
 
 const BODY_START = 1500;
@@ -94,6 +95,7 @@ async function runEdit(
     title: "Edit a Google Doc",
     summary: summaryOf(plan, structure.title),
     content: contentOf(plan),
+    doc: redlineOf(structure, ops),
     details: [
       `Doc id: ${id}`,
       `revisionId: ${revisionId}`,
