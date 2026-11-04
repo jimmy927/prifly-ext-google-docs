@@ -208,10 +208,13 @@ test("an edit is confirmed with the exact change, then sent as one batchUpdate h
   const card = fake.confirms[0];
   expect(card?.summary).toBe('Make 2 changes to "Plan".');
   expect(card?.content).toBe(
-    "1. Insert:\n    New. \n\n2. Replace every match (1 in the body; matching case):\n    world\n  →\n    there",
+    '1. Insert before "Hello world":\n    New. \n\n2. Replace every match (1 in the body; matching case):\n    world\n  →\n    there',
   );
   expect(card?.content).not.toContain(DOC_ID);
   expect(card?.summary).not.toContain(DOC_ID);
+  // The redline a prifly with "confirm-doc" draws in its place.
+  const doc = (card as { doc?: { counts: string } } | undefined)?.doc;
+  expect(doc?.counts).toBe("2 changes: 1 edited");
   expectPlainCard(card, [
     `Doc id: ${DOC_ID}`,
     "revisionId: rev-1",

@@ -192,6 +192,16 @@ function findHeading(structure: Structure, wanted: string): Paragraph | string {
   return `no heading reads "${wanted}"${known === "" ? " (the Doc has no headings)" : `; the headings are ${known}`}`;
 }
 
+/** Where an index lands, for the reader: before a paragraph, or inside one. */
+function placeOf(structure: Structure, index: number): string {
+  const paragraph = structure.paragraphs.find(
+    (each) => each.startIndex <= index && index < each.endIndex,
+  );
+  if (paragraph === undefined) return "at the end";
+  const words = brief(paragraph.text);
+  return index === paragraph.startIndex ? `before ${words}` : `inside ${words}`;
+}
+
 function planInsert(op: InsertOp, structure: Structure, given: number): [Step, Note] | string {
   if (op.afterHeading === null) {
     if (op.index < 1 || op.index >= structure.bodyEnd) {
@@ -202,7 +212,7 @@ function planInsert(op: InsertOp, structure: Structure, given: number): [Step, N
       { at: op.index, given, kind: "insert", requests: [request] },
       {
         sentence: (title) => `Insert new text into ${JSON.stringify(title)}.`,
-        content: `Insert:\n${block(op.text)}`,
+        content: `Insert ${placeOf(structure, op.index)}:\n${block(op.text)}`,
       },
     ];
   }
