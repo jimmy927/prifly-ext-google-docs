@@ -1,5 +1,9 @@
 # prifly-ext-google-docs
 
+![The confirm card for a Google Docs edit in prifly: the Doc as it will read, with the removed text struck through and the added text highlighted](docs/screenshot.png)
+
+*The confirm card for an edit, shown before anything is written to the Doc (invented example data).*
+
 Your Google Docs in every prifly session. You ask in plain words; the session
 finds, reads, creates and edits Docs in place and answers their comments. It
 has no launcher, chip or panel of its own.
